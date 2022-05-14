@@ -1,0 +1,5225 @@
+---
+title: "M.Sc._LSt_2021/2022"
+author: "Lennart Stock"
+date: "10/11/2021"
+output:
+  html_document:
+    keep_md: yes
+---
+
+This script serves the data analysis of FT-ICR-MS spectral data. 
+
+The script is based on a script of Tabea Hildebrand/Helena Osterholz, modified and further developed by Lennart Stock by many help of Andreas Eich and Hagen Buck-Wiese.
+
+
+# 1. Preparation
+
+## 1.1 clean environment
+
+```{r knitr-chunk, include=FALSE}
+
+rm(list=ls(all=TRUE)) # clear environment
+
+options(digits = 10)
+
+library(knitr)
+
+```
+
+```{r setup-chunk, include=FALSE}
+
+knitr::opts_chunk$set(dev = "svg",
+                      dpi = 300,
+                      echo = FALSE,
+                      cache = TRUE)
+
+```
+
+
+## 1.2 Load packages
+
+```{r}
+library(ggbreak) 
+library(tidyverse)  
+library(vegan)      
+library(ape)      
+library(UpSetR)
+library(broom)
+library(ggpubr)
+library(rstatix)
+require("knitr")
+library(readxl)
+library(reshape2)
+require(ggrepel)
+library(berryFunctions)
+library(scatterplot3d)
+library(writexl)
+```
+
+## 1.3 Load formula
+
+```{r setup, include=FALSE, echo=FALSE}
+#delete rows containing n NA`s
+
+delete.na <- function(DF, n = 0) {
+  DF[rowSums(is.na(DF)) <= n, ]
+}  
+
+
+#Function to remove zero columns
+
+remove_zero_cols <- function(df) {
+  rem_vec <- NULL
+  for(i in 1:ncol(df)){
+    this_sum <- summary(df[,i])
+    zero_test <- length(which(this_sum == 0))
+    if(zero_test == 6) {
+      rem_vec[i] <- names(df)[i]
+    }
+  }
+  features_to_remove <- rem_vec[!is.na(rem_vec)]
+  rem_ind <- which(names(df) %in% features_to_remove)
+  df <- df[,-rem_ind]
+  return(df)
+}
+
+# prep function from https://stackoverflow.com/questions/44266376/dplyr-function-to-compute-average-n-sd-and-standard-error
+
+my_fun <- function(x, num_var){
+  num_var <- enquo(num_var)
+
+  x %>%
+    summarize(avg = mean(!!num_var), n = n(), 
+              sd = sd(!!num_var), se = sd/sqrt(n))
+}
+
+
+#rename function (https://stackoverflow.com/questions/21502465/replacement-for-rename-in-dplyr/26146202#26146202)
+
+rename <- function(dat, oldnames, newnames) {
+  datnames <- colnames(dat)
+  datnames[which(datnames %in% oldnames)] <- newnames
+  colnames(dat) <- datnames
+  dat
+}
+
+
+
+#plot multiple spectra function: https://chem.sites.mtu.edu/mazzoleni/index.php/2016/02/20/looping-functions-with-ggplot2/
+
+plotMassSpectra <- function(X, na.rm = TRUE, ...) {
+  nm <- names(X)
+  for (i in seq_along(nm)) {
+    plots <-ggplot(X, aes_string(x = "mz", xend = "mz", y = 0, yend = nm[i])) + geom_segment(aes_string(color = "Present_in_both")) +
+      labs(x = "m/z", y = "I", title = paste("Reconstructed Mass Spectra","mz_", nm[i], sep = " "))
+    ggsave(plots, filename = paste("mz", nm[i], ".jpg", sep=""))
+  }
+}
+
+#replicate summary (mean of either 1, 2 or 3)
+
+higher_0 = function(vec,threshold){
+  n_above_0=which(vec>0)%>%
+    length()
+  if(n_above_0>=threshold){
+    vec_no_0=vec[which(vec>0)]
+    mean=mean(vec_no_0)  
+    return(mean)
+  }
+return(NA)
+}
+
+
+```
+
+## 1.4 Set working directory
+
+```{r}
+
+#set working directory. R Markdown usually automatically sets directory to .rmd file path. 
+
+opts_knit$set(root.dir = "C:/Users/lenna/Desktop/Studium Oldenburg/Master Thesis/R-Analysis")
+
+setwd("C:/Users/lenna/Desktop/Studium Oldenburg/Master Thesis/R-Analysis")
+
+getwd()
+
+```
+## 1.5 Graphs and figures
+```{r}
+# color for color blinds
+
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+```
+
+#3 Experimental data processing 
+
+## 3.1 BA solubility
+
+```{r}
+#if this brings problems: Go  to AE counts
+
+Solubl<- read.csv("data/BA_solubl.csv", header= T, check.names = T)
+
+names(Solubl) = c("ACN.MQ","SL_g", "SL_mol", "Lit", "T_cel")
+
+
+Solubl_1 <- Solubl %>% 
+  group_by(ACN.MQ,Lit) %>% 
+  summarize(mean = mean(SL_mol), n = n(), 
+              sd = sd(SL_mol), se = sd/sqrt(n))
+  
+pd <- position_dodge(0.5)
+
+Solubl$Lit = as.character(Solubl$Lit) 
+
+Solubl_1$ACN.MQ <- factor(Solubl_1$ACN.MQ,levels = c("100/0", "50/50", "30/70", "5/95", "0/100"))
+
+svg("BzAc_SL_1.svg", width = 10.5/2.54 , height = 7.4/2.54, pointsize = 12)
+
+BzAc_SL_1 = ggplot(Solubl_1, aes(x=ACN.MQ, y=mean, colour=as.factor(Lit), group=ACN.MQ)) + 
+  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), colour="black", width=.2, position=pd) +
+  geom_point(position=pd, size=1.5) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9","#009E73"))    +
+  labs(y= "Solubility [mol*L-1]", x = "ACN/MQ ratio Vol %") +
+  theme_classic()
+
+BzAc_SL_1
+
+dev.off()
+```
+
+## 3.2 IHSS-NOM Benzoic acid removal 
+
+### 3.2.1 Load data
+
+```{r}
+
+#load ICBM-OCEAN data of alcohol derivatization experiments. "D" stands for derivatized samples
+
+# load all algal excudate samples containing NELHA as well
+
+IHSS_BA_df = read.csv("ICBM_OCEAN/IHSS_BA.csv", header = T, stringsAsFactors = F)
+
+
+```
+
+
+### 3.2.2 Rename samples / make sample names shorter
+
+```{r}
+
+samp <- IHSS_BA_df %>% 
+  select(85:129)
+
+chem <- IHSS_BA_df %>% 
+  select(1:84)
+
+samp1 <- colnames(samp)
+
+chem1 <- colnames(chem)
+
+samp2 <- data.frame(samp1)
+
+samp3 <- as.data.frame(str_split_fixed(samp2$samp1, "_", 9))
+
+samp4 <- samp3 %>% 
+  select(6:8)
+
+samp5 <- str_c(samp4$V6, samp4$V7,samp4$V8, sep = "_", collapse = NULL)
+
+
+G <- c(chem1,c("IHSS_NOM_01", "IHSS_NOM_02", "IHSS_NOM_03", "PB_1_01", "PB_1_02", "PB_1_03", "PB_2_01", "PB_2_02", "PB_2_03", "Blank_A1_01", "Blank_A1_02", "Blank_A1_03", "Blank_A2_01", "Blank_A2_02", "Blank_A2_03", "Blank_B1_01", "Blank_B1_02", "Blank_B1_03", "Blank_B2_01", "Blank_B2_02", "Blank_B2_03", "Blank_C1_01", "Blank_C1_02", "Blank_C1_03", "Blank_C2_01", "Blank_C2_02", "Blank_C2_03", "IHSS_A1_01", "IHSS_A1_02", "IHSS_A1_03", "IHSS_A2_01", "IHSS_A2_02", "IHSS_A2_03", "IHSS_B1_01", "IHSS_B1_02", "IHSS_B1_03", "IHSS_B2_01", "IHSS_B2_02", "IHSS_B2_03", "IHSS_C1_01", "IHSS_C1_02", "IHSS_C1_03", "IHSS_C2_01", "IHSS_C2_02", "IHSS_C2_03", "IHSS_D1_01", "IHSS_D1_02", "IHSS_D1_03", "IHSS_D2_01", "IHSS_D2_02", "IHSS_D2_03"))
+
+colnames(IHSS_BA_df) <- c(G)
+
+```
+
+
+### 3.5.3 Additional structural informations
+
+Exchange slash with dot and add additional structural information (Lipids, Proteins, AminoSugars, Carbohydrates, Nucleotides, Phytochems)
+
+
+```{r}
+
+IHSS_BA1 <- IHSS_BA_df %>% 
+  mutate(N.C = N/C) %>%
+  mutate(P.C = P/C) %>% 
+  mutate(N.P = N/P) %>%
+  mutate(Lipids = ifelse(O.C <= 0.6 & H.C >= 1.32 & N.C <= 0.125 & P.C < 0.35, 1, 0)) %>%
+  mutate(Proteins = ifelse(O.C > 0.12 & O.C <= 0.6 & H.C > 0.9 & H.C < 2.5 & N.C >= 0.126 & N.C <= 0.7 & P.C < 0.1 | O.C > 0.6 & O.C <= 1 & H.C > 1.2 & H.C < 2.5 & N.C > 0.2 & N.C <= 0.7 & P.C < 0.17, 1, 0)) %>%
+  mutate(AminoSugars = ifelse(O.C >= 0.61 & H.C >= 1.45 & N.C > 0.07 & N.C <= 0.2 & P.C < 0.3 & N.P <= 2 & O >= 3 & N >= 1, 1, 0)) %>%
+  mutate(Carbohydrates = ifelse(O.C >= 0.8 & H.C >= 1.65 & H.C < 2.7 & N == 0, 1, 0)) %>%
+  mutate(Nucleotides = ifelse(H.C >= 0.5 & H.C < 1.7 & O.C > 1 & O.C < 1.8 & N.C >= 0.2 & N.C <= 0.5 & P.C >= 0.1 & P.C < 0.35 & N.P > 0.6 & N.P <= 5 & N >= 2 & P >= 1 & S == 0 & reference > 305 & reference < 523, 1, 0)) %>%
+  mutate(Phytochems = ifelse(O.C <= 1.15 & H.C < 1.32 & N.C < 0.126 & P.C <= 0.2 & N.P <= 3, 1, 0)) %>%
+  replace(is.na(.), 0) %>%
+  mutate(Unknown = ifelse(Lipids == 0 & Proteins == 0 & AminoSugars == 0 & Carbohydrates == 0 & Nucleotides == 0 & Phytochems == 0, 1, 0))
+
+
+```
+
+
+### 3.5.4 Delete heavy isotopes
+
+C13, N15, S34 and O18 are duplicates of C12, N14, S32 and O16, respectively. Therefore, they are deleted
+
+
+```{r}
+
+IHSS_BA1 <- IHSS_BA1 %>%
+  filter (C13==0, O18==0, N15==0, S34==0, Cl37==0) #~2000 rows were deleted.
+
+```
+
+### 3.5.5 Data clean up (contaminant removal)
+
+
+```{r}
+
+# replace all NA with 0
+
+IHSS_BA1 <- IHSS_BA1 %>%
+  replace(is.na(.), 0)
+
+# divide table into two: one with chemical features, the other with the samples
+
+IHSS_BA1_chem <- IHSS_BA1 %>%
+  dplyr::select(mz:alternative_formula, N.C:Unknown)
+
+IHSS_BA1_samp <- IHSS_BA1 %>%
+  dplyr::select(formula_isotopefree, mz, present_in, 85:135)
+
+#get the row with BzAc 
+BA = IHSS_BA1 %>% 
+  dplyr::select(formula_isotopefree, mz, MDL_3.5, 85:135)
+
+BA = BA[7,]
+  
+BA1 = as.vector(BA)
+
+#remove contaminants based on S/MDL ratios from blanks (prozessed individually)
+
+#PBlank
+
+NoContaminants_IHSS_BA1 <- IHSS_BA1 %>%
+  dplyr::select(formula_isotopefree, mz, MDL_3.5, present_in, 85:135) %>%
+  mutate(BlankMax = pmax(PB_1_01, PB_1_02, PB_1_03, PB_2_01, PB_2_02, PB_2_03)) %>%
+  mutate(S_MDLratio = BlankMax/MDL_3.5) %>%
+  filter(S_MDLratio < 2) %>% 
+  select(1:57)
+
+# A
+
+Blank_strip_A = NoContaminants_IHSS_BA1 %>% 
+  dplyr::select(formula_isotopefree, mz, MDL_3.5, present_in, PB_1_01, PB_1_02, PB_1_03, PB_2_01, PB_2_02, PB_2_03, IHSS_A1_01, IHSS_A1_02, IHSS_A1_03, IHSS_A2_01, IHSS_A2_02, IHSS_A2_03) %>% 
+   mutate(BlankMax = pmax(PB_1_01, PB_1_02, PB_1_03, PB_2_01, PB_2_02, PB_2_03)) %>%
+  mutate(S_MDLratio = BlankMax/MDL_3.5) %>%
+  filter(S_MDLratio < 2) %>% 
+  select(1,5:16) %>% 
+  column_to_rownames("formula_isotopefree") %>%
+  na_if(y = 0)
+
+# get Minimum intensity of each sample
+
+Min = Blank_strip_A %>% 
+  summarise_if(is.numeric, min, na.rm = T) 
+
+Min = as.data.frame(t(Min))
+
+# get Maximum of Minimum intensities 
+
+max(Min$V1) # -- > 3398087
+
+Blank_strip_A[Blank_strip_A < 3398087] <- 0
+
+# na to 0 and delete zero columns 
+
+Blank_strip_A[is.na(Blank_strip_A)] <- 0
+
+Blank_strip_A <- Blank_strip_A[rowSums(Blank_strip_A[])>0,]
+
+# row names to column 
+
+Blank_strip_A = Blank_strip_A %>% 
+  rownames_to_column(var = "formula_isotopefree")
+
+#B
+
+Blank_strip_B = NoContaminants_IHSS_BA1 %>% 
+  dplyr::select(formula_isotopefree, mz, MDL_3.5, present_in, Blank_A1_01, Blank_A1_02, Blank_A1_03, Blank_A2_01, Blank_A2_02, Blank_A2_03, IHSS_B1_01, IHSS_B1_02, IHSS_B1_03, IHSS_B2_01, IHSS_B2_02, IHSS_B2_03) %>% 
+   mutate(BlankMax = pmax(Blank_A1_01, Blank_A1_02, Blank_A1_03, Blank_A2_01, Blank_A2_02, Blank_A2_03)) %>%
+  mutate(S_MDLratio = BlankMax/MDL_3.5) %>%
+  filter(S_MDLratio < 2) %>% 
+  select(1,5:16) %>% 
+  column_to_rownames("formula_isotopefree") %>%
+  na_if(y = 0)
+
+# get Minimum intensity of each sample
+
+Min = Blank_strip_B %>% 
+  summarise_if(is.numeric, min, na.rm = T) 
+
+Min = as.data.frame(t(Min))
+
+# get Maximum of Minimum intensities 
+
+max(Min$V1) # -- > 3418908 
+
+Blank_strip_B[Blank_strip_B < 3418908] <- 0
+
+# na to 0 and delete zero columns 
+
+Blank_strip_B[is.na(Blank_strip_B)] <- 0
+
+Blank_strip_B <- Blank_strip_B[rowSums(Blank_strip_B[])>0,]
+
+# row names to column 
+
+Blank_strip_B = Blank_strip_B %>% 
+  rownames_to_column(var = "formula_isotopefree")
+
+# C
+
+Blank_strip_C = NoContaminants_IHSS_BA1 %>% 
+  dplyr::select(formula_isotopefree, mz, MDL_3.5, present_in, Blank_B1_01, Blank_B1_02, Blank_B1_03, Blank_B2_01, Blank_B2_02, Blank_B2_03, IHSS_C1_01, IHSS_C1_02, IHSS_C1_03, IHSS_C2_01, IHSS_C2_02, IHSS_C2_03) %>% 
+   mutate(BlankMax = pmax(Blank_B1_01, Blank_B1_02, Blank_B1_03, Blank_B2_01, Blank_B2_02, Blank_B2_03)) %>%
+  mutate(S_MDLratio = BlankMax/MDL_3.5) %>%
+  filter(S_MDLratio < 2) %>% 
+  select(1,5:16) %>% 
+  column_to_rownames("formula_isotopefree") %>%
+  na_if(y = 0)
+
+# get Minimum intensity of each sample
+
+Min = Blank_strip_C %>% 
+  summarise_if(is.numeric, min, na.rm = T) 
+
+Min = as.data.frame(t(Min))
+
+# get Maximum of Minimum intensities 
+
+max(Min$V1) # -- > 3509781 
+
+Blank_strip_C[Blank_strip_C < 3509781] <- 0
+
+# na to 0 and delete zero columns 
+
+Blank_strip_C[is.na(Blank_strip_C)] <- 0
+
+Blank_strip_C <- Blank_strip_C[rowSums(Blank_strip_C[])>0,]
+
+# row names to column 
+
+Blank_strip_C = Blank_strip_C %>% 
+  rownames_to_column(var = "formula_isotopefree")
+
+# D
+
+Blank_strip_D = NoContaminants_IHSS_BA1 %>% 
+  dplyr::select(formula_isotopefree, mz, MDL_3.5, present_in, Blank_C1_01, Blank_C1_02, Blank_C1_03, Blank_C2_01, Blank_C2_02, Blank_C2_03, IHSS_D1_01, IHSS_D1_02, IHSS_D1_03, IHSS_D2_01, IHSS_D2_02, IHSS_D2_03) %>% 
+   mutate(BlankMax = pmax(Blank_C1_01, Blank_C1_02, Blank_C1_03, Blank_C2_01, Blank_C2_02, Blank_C2_03)) %>%
+  mutate(S_MDLratio = BlankMax/MDL_3.5) %>%
+  filter(S_MDLratio < 2) %>% 
+  select(1,5:16) %>% 
+  column_to_rownames("formula_isotopefree") %>% 
+  na_if(y = 0)
+
+# get Minimum intensity of each sample
+
+Min = Blank_strip_D %>% 
+  summarise_if(is.numeric, min, na.rm = T) 
+
+Min = as.data.frame(t(Min))
+
+# get Maximum of Minimum intensities 
+
+max(Min$V1) # -- > 3443914 
+
+Blank_strip_D[Blank_strip_D < 3443914] <- 0
+
+# na to 0 and delete zero columns 
+
+Blank_strip_D[is.na(Blank_strip_D)] <- 0
+
+Blank_strip_D <- Blank_strip_D[rowSums(Blank_strip_D[])>0,]
+
+# row names to column 
+
+Blank_strip_D = Blank_strip_D %>% 
+  rownames_to_column(var = "formula_isotopefree")
+
+
+#combine the individual blank stripped samples
+
+NoContaminants_IHSS_BA1 = NoContaminants_IHSS_BA1 %>% 
+  select(1:7) %>% 
+  left_join(Blank_strip_A, by='formula_isotopefree') %>%
+  left_join(., Blank_strip_B, by='formula_isotopefree') %>% 
+  left_join(., Blank_strip_C, by='formula_isotopefree') %>% 
+  left_join(., Blank_strip_D, by='formula_isotopefree') %>% 
+  replace(is.na(.), 0) %>% 
+  select(1:13, 20:25, 32:37, 44:49, 14:19, 26:31, 38:43: 50:55)
+
+# delete common contaminants and filter all formulas which appear to be in more than 24 (all IHSS samples) samples (max possible samples that could contain identical peaks)
+
+C <- read.csv("Data/Contaminants.csv")
+
+NoContaminants_IHSS_BA1 <- NoContaminants_IHSS_BA1 %>% 
+  anti_join(C, by = c("formula_isotopefree" = "Formula")) %>% 
+  filter(present_in < 24) %>% 
+  select(-present_in) 
+
+# add BzAc row again to dataframe
+
+NoContaminants_IHSS_BA1 <- insertRows(NoContaminants_IHSS_BA1, 5 , new = BA)
+
+
+#Have a look at the data
+
+NoCont_long <- NoContaminants_IHSS_BA1 %>%
+  gather(SampleName, intensity, 4:54) %>%
+  filter(intensity!=0)%>%
+  dplyr::select(formula_isotopefree,mz,SampleName,intensity) %>%
+  mutate(SampleName=substr(SampleName,1,nchar(SampleName)-3))
+
+
+ggplot(NoCont_long)+
+  geom_jitter(mapping=aes(x=mz, y=intensity, colour= SampleName)) + 
+  ylim(0,1.5e08)
+
+
+IHSS_BA1_samp = NoContaminants_IHSS_BA1
+
+
+```
+
+
+
+### 3.5.7 combining triplicate measurements
+
+Combination of triplicate measurement. Criteria: formulas that appear in all triplicate measurements
+
+```{r}
+
+#filter triplicate measurements if at least one contains a zero value & combine triplicate measurements by mean value 
+
+# take 1 2 or 3 measurements as mean (exchange the number behind the I "dplyr::summarise(I_mean=higher_0(I,2))")
+
+ IHSS_BA1_samp_comb = IHSS_BA1_samp %>%
+  select(1,4:54) %>% 
+  gather(rep, I, -formula_isotopefree) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(formula_isotopefree, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(formula_isotopefree, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) 
+
+#make cleaned and summarized replicate table with chem data
+
+IHSS_clean = IHSS_BA1_samp %>% 
+  select(1,4:6)
+
+all_IHSS_clean = IHSS_BA1_chem %>% 
+  right_join(IHSS_clean, by = "formula_isotopefree")
+
+#combining replicates 
+
+ IHSS_3D = IHSS_BA1_samp_comb %>%
+  gather(rep, I, -formula_isotopefree) %>% 
+  separate(rep, into=c('sample', 'replica'), sep=  "(?<=[A-Za-z])(?=[0-9])") %>% 
+  dplyr::group_by(formula_isotopefree, sample) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(formula_isotopefree, sample) %>% 
+  unite(sample, sample, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  select(1,5:8)
+ 
+ #adding mz values
+ 
+mz_IHSS = IHSS_BA1_chem %>% 
+  select(mz, formula_isotopefree)
+
+mz_IHSS_3D = IHSS_3D %>% 
+  right_join(mz_IHSS,by = "formula_isotopefree") %>% 
+  select(6,2:5)
+
+mz_IHSS_3D = delete.na(mz_IHSS_3D, 4)
+
+
+```
+
+### 3.5.8 Information content of spectra
+
+make an abundance matrix, with sites (samples) in rows and species (sum formulas) in columns
+
+```{r}
+
+#sum all intensities to get TIC 
+
+IHSS_BA1_samp_comb = IHSS_BA1_samp_comb %>%
+  mutate_all(~ na_if(., . < 0))
+
+IHSS_BA_TIC = as.data.frame(colSums(IHSS_BA1_samp_comb[,-1], na.rm = TRUE))
+
+IHSS_BA_TIC = as.data.frame(t(IHSS_BA_TIC))
+
+rownames(IHSS_BA_TIC) = c("I_TIC")
+
+# get intensities of BzAc
+
+IHSS_I_BA = IHSS_BA1_samp_comb %>% 
+  column_to_rownames("formula_isotopefree")
+
+IHSS_I_BA = IHSS_I_BA %>% 
+  filter(row.names(IHSS_I_BA) %in% c("C7H6O2"))
+
+rownames(IHSS_I_BA) = c("I_BzAc")
+
+# count all peaks of each spectrum
+
+IHSS_count = as.data.frame(colSums(!is.na(IHSS_BA1_samp_comb)))
+
+IHSS_count = as.data.frame(t(IHSS_count))
+
+rownames(IHSS_count) = c("count")
+
+IHSS_count = IHSS_count %>% 
+  select(2:18)
+
+#combine all extracted or calculated values
+
+IHSS_calc = IHSS_BA_TIC %>% 
+  union(IHSS_I_BA) %>% 
+  union(IHSS_count)
+
+#calculate information content
+
+IHSS_IC = as.data.frame(t(IHSS_calc))
+
+IHSS_IC_norm = IHSS_IC %>% 
+  mutate(I_TIC_norm = (I_TIC/I_TIC)) %>% 
+  mutate(I_BzAc_norm = (I_BzAc/I_TIC)) %>% 
+  mutate(I_IC = (I_TIC/I_BzAc)) %>% 
+  rownames_to_column(var = "sample")
+
+IHSS_IC_no_blanks = IHSS_IC_norm %>% 
+  slice(7:15) %>% 
+  add_column(Exp = c("A","A", "B", "B", "C", "C", "D", "D", "E")) %>% 
+  group_by(Exp) %>% 
+  summarize(mean = mean(I_BzAc_norm), n = n(), 
+              sd = sd(I_BzAc_norm), se = sd/sqrt(n)) %>% 
+  add_column(Ex=c("No_derivatization", "Derivatization", "Derivatization_LLE" , "Derivatization_crystn", "Standard")) %>% 
+  slice(2:6) #to remove IHSS_A
+  
+IHSS_count_no_blanks = IHSS_IC_norm %>% 
+  slice(7:15) %>% 
+  add_column(Exp = c("A","A", "B", "B", "C", "C", "D", "D", "E")) %>% 
+  group_by(Exp) %>% 
+  summarize(mean_c = mean(count), n_c = n(), 
+              sd_c = sd(count), se_c = sd_c/sqrt(n_c)) %>% 
+  add_column(Ex=c("No_derivatization", "Derivatization", "Derivatization_LLE" , "Derivatization_crystn", "Standard"))
+
+df_plot_counts = IHSS_IC_no_blanks %>% 
+  left_join(IHSS_count_no_blanks, by = "Exp", keep = F)
+
+  
+#ggplot
+Farb = c("No_derivatization" = "#E69F00", "Derivatization"="#56B4E9","Derivatization_LLE"="#009E73", "Derivatization_crystn"="#F0E442","Standard"="#0072B2")
+
+
+Farbe = c("Derivatization"="#56B4E9","Derivatization_LLE"="#009E73", "Derivatization_crystn"="#F0E442","Standard"="#0072B2")
+
+pd <- position_dodge(0.5)
+
+svg("IHSS_IC_plot_1_no_A.svg", width = 10.5/2.54 , height = 7.4/2.54, pointsize = 12)
+
+IHSS_IC_plot_1 = ggplot(IHSS_IC_no_blanks, aes(x=Ex ,y = mean)) +
+  geom_bar(size = 0, stat = "identity", fill = Farbe)  + 
+  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd) , colour="black", width=.2, position=pd) +
+  scale_y_continuous(labels=scales::percent) +
+  scale_fill_manual(values=Farbe) +
+  labs(y = "BzAc in sample [%]") +
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust =1), axis.title.x=element_blank())
+
+IHSS_IC_plot_1
+
+dev.off()
+
+# Second plot (correlation with counts)
+
+svg("IHSS_IC_plot_2.svg", width = 16/2.54 , height = 7.4/2.54, pointsize = 12)
+
+IHSS_IC_plot_2 = ggplot(df_plot_counts, aes(x=mean_c , y = mean, color = Ex.x)) +
+  geom_point(size = 3, stat = "identity", fill = Farbe)  + 
+  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd) , colour="darkgrey", width=.1) +
+  geom_errorbar(aes(xmin=mean_c-sd_c, xmax=mean_c+sd_c) , colour="grey", width=.1) +
+  scale_y_continuous(labels=scales::percent) +
+  scale_color_manual(values=Farbe) +
+  labs(y = "BzAc in sample", x = "Peaks in sample") +
+  xlim(200, 4100) +
+  theme_classic()
+
+IHSS_IC_plot_2
+
+dev.off()
+
+#same plot but different x limits
+
+svg("IHSS_IC_plot_3.svg", width = 16/2.54 , height = 7.4/2.54, pointsize = 12)
+
+IHSS_IC_plot_3 = ggplot(df_plot_counts, aes(x=mean_c , y = mean, color = Ex.x)) +
+  geom_point(size = 3, stat = "identity", fill = Farbe)  + 
+  geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd) , colour="darkgrey", width=.1) +
+  geom_errorbar(aes(xmin=mean_c-sd_c, xmax=mean_c+sd_c) , colour="grey", width=.1) +
+  scale_y_continuous(labels=scales::percent) +
+  scale_color_manual(values=Farbe) +
+  labs(y = "BzAc in sample", x = "Peaks in sample") +
+  xlim(200, 900) +
+  theme_classic()
+
+IHSS_IC_plot_3
+
+dev.off()
+
+library(scatterplot3d)
+
+#evt noch abbildung mit peaks? 3D plot 
+
+mz_IHSS_3D_plot_no_A = mz_IHSS_3D %>% 
+  gather(Sample, I, -mz) %>% 
+  filter(Sample != "IHSS_A") %>% 
+  drop_na() %>% 
+  group_by(Sample) %>% 
+  mutate(I_norm = I/max(I)) %>% 
+  select(1,2,4)
+  
+
+mz_IHSS_3D_plot_no_A_norm = mz_IHSS_3D %>% 
+  gather(Sample, I, -mz) %>% 
+  filter(mz != 121.0294990) %>%
+  filter(Sample != "IHSS_A") %>%
+  drop_na() %>% 
+  group_by(Sample) %>% 
+  mutate(I_norm = I/max(I)) %>% 
+  select(1,2,4)
+
+
+Farbe = c("Derivatization"="#56B4E9","Derivatization_LLE"="#009E73", "Derivatization_crystn"="#F0E442","Standard"="#0072B2")
+
+Farbe <- Farbe[as.numeric(as.factor(mz_IHSS_3D_plot_no_A$Sample))]
+
+svg("IHSS_IC_plot_4_no_A.svg", width = 16/2.54 , height = 20/2.54, pointsize = 12)
+
+IHSS_IC_plot_4 <- scatterplot3d(mz_IHSS_3D_plot_no_A[,1:3],type = "h", pch = "", xlim = c(100, 700), zlim = c(0, 1.2), angle = -135, box = F, grid = T, color = Farbe)
+
+dev.off()
+
+Farbe = c("Derivatization"="#56B4E9","Derivatization_LLE"="#009E73", "Derivatization_crystn"="#F0E442","Standard"="#0072B2")
+
+Farbe <- Farbe[as.numeric(as.factor(mz_IHSS_3D_plot_no_A_norm$Sample))]
+
+svg("IHSS_IC_plot_4_no_A_norm.svg", width = 16/2.54 , height = 20/2.54, pointsize = 12)
+
+IHSS_IC_plot_4 <- scatterplot3d(mz_IHSS_3D_plot_no_A_norm[,1:3],type = "h", pch = "", zlim = c(0, 1.2), xlim = c(100, 700), angle = -135, box = F, grid = T, color = Farbe)
+
+dev.off()
+
+#upset
+IHSS_upset = mz_IHSS_3D %>% 
+  column_to_rownames(var = "mz")
+
+IHSS_upset = (IHSS_upset) %>% 
+  replace(is.na(.), 0)
+
+IHSS_upset[(IHSS_upset > 0)] <- 1
+
+IHSS_upset = as.data.frame(IHSS_upset)
+
+IHSS_upset = IHSS_upset %>% 
+  rownames_to_column(var = "mz")
+
+svg("IHSS_IC_Upset.svg", width = 16/2.54 , height = 10/2.54, pointsize = 12)
+
+# upset(as.data.frame(IHSS_upset), sets = c( "IHSS_A","IHSS_B" ,  "IHSS_C"  , "IHSS_D" ,  "IHSS_NOM"), keep.order = T, order.by = "freq", mainbar.y.label = "Formula Intersection Size", scale.intersections = "identity", text.scale = 0.7, set_size.numbers_size=T)
+
+dev.off()
+```
+
+
+### 3.6.3 Normalization 
+
+```{r}
+#make chem df for all samples (NSW, IHSS and AE)
+
+
+IHSS_BA1_chem_select = IHSS_BA1_chem %>% 
+  select(5,1)
+
+IHSS_BA1_samp_comb <- subset(IHSS_BA1_samp_comb, formula_isotopefree != "C7H6O2") 
+
+IHSS_BA1_counts = IHSS_BA1_samp_comb %>% 
+   column_to_rownames(var = "formula_isotopefree")
+
+
+IHSS_BA1_counts = delete.na(IHSS_BA1_counts, 17)
+  
+
+#  IHSS_NOM_samp_comb,
+  
+  
+IHSS_BA1_abund_matrix <- IHSS_BA1_counts %>%
+      replace(is.na(.), 0)
+
+IHSS_BA1_abund_matrix <- t(IHSS_BA1_abund_matrix)
+
+IHSS_BA1_abund_matrix <- as.data.frame(IHSS_BA1_abund_matrix)
+
+IHSS_BA1_abund_matrix <- as.matrix(IHSS_BA1_abund_matrix)
+
+```
+
+
+Take the relative abundance of intensities along sites
+
+```{r}
+
+IHSS_BA1_norm <- decostand(IHSS_BA1_abund_matrix, method = "total") # is doing the same as make_relativ (funrar package)
+
+rowSums(IHSS_BA1_norm) # should be one everywhere
+
+```
+
+### 3.6.4 mean_mat 
+
+(mean.mat calculations follow a script of Helena Osterholz and Tabea Hildebrandt. PCoA calculations and visualization were done with the help of Andi Eich)
+
+With an old script of Helena Osterholz, I can combine the samples and their intensities with the chemical data --> mean mat
+
+Prepare data for combining it --> z.b. PCoA
+
+```{r}
+# make relative abundance table joinable
+IHSS_BA1_norm <- as.data.frame(IHSS_BA1_norm) %>%
+   rownames_to_column(var = "SampleName")
+
+
+# only take "community" data
+IHSS_BA1_comm <- IHSS_BA1_norm
+
+IHSS_BA1_comm <- IHSS_BA1_comm %>%
+  dplyr::select(2:ncol(IHSS_BA1_comm))
+
+# only take "environmental" data
+IHSS_BA1_env <- IHSS_BA1_norm %>%
+  dplyr::select(1) %>% 
+  add_column(Method = c("Blank","Blank","Blank","Blank","Blank","Blank","SPE-DOM","SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","STD", "PBlank", "PBlank"))
+
+(IHSS_BA1_norm$SampleName)
+
+```
+
+
+```{r}
+
+#get mean.mat data.frame
+
+IHSS_BA1_domt <- IHSS_BA1_norm %>%
+  column_to_rownames(var = "SampleName")
+
+IHSS_BA1_dom <- as.data.frame(t(IHSS_BA1_domt))
+
+tIHSS_BA1_norm <- IHSS_BA1_dom %>%
+  rownames_to_column("formula_isotopefree")
+
+
+# Nimm nur die Massen, die auch in IHSS_BA1_norm bzw. final sind:
+
+IHSS_BA1_Chem <- tIHSS_BA1_norm %>%
+  left_join(IHSS_BA1_chem, by = "formula_isotopefree")%>% 
+  dplyr::mutate(NOSC = -((4*C + H - 3*N - 2*O + 5*P - 2*S)/(C)) + 4) %>% 
+  dplyr::filter(!duplicated(formula_isotopefree))
+
+IHSS_BA1_Chem = IHSS_BA1_Chem %>% 
+ dplyr::select(1, 21:ncol(IHSS_BA1_Chem))
+```
+
+```{r}
+#calculate averages from chem.
+#rows are chem variables, columns are sample number
+#mean mat - gewichtete mittelwerte unter einbeziehung der peakintensität für jede probe
+
+
+
+IHSS_BA1_Chem <- IHSS_BA1_Chem %>%
+  column_to_rownames(var = "formula_isotopefree") %>% 
+  mutate_all(function(x) as.numeric(as.character(x)))
+
+IHSS_BA1.mean_mat <- matrix(NA,nrow = dim(IHSS_BA1_Chem)[2],ncol = dim(IHSS_BA1_dom)[2])
+
+
+for (j in 1:dim(IHSS_BA1_Chem)[2]) {
+  for(k in 1:dim(IHSS_BA1_dom)[2]) {
+        IHSS_BA1.mean_mat[j,k] <- sum(IHSS_BA1_Chem[,j]*IHSS_BA1_dom[,k])
+  }
+}
+
+
+IHSS_BA1_mean_mat <- as.data.frame(IHSS_BA1.mean_mat)
+colnames(IHSS_BA1_mean_mat) <- colnames(IHSS_BA1_dom)
+row.names(IHSS_BA1_mean_mat) <- colnames(IHSS_BA1_Chem)
+IHSS_BA1_mean_mat <- t(IHSS_BA1_mean_mat)/(colSums(IHSS_BA1_dom))
+IHSS_BA1_mean_mat <- as.data.frame((IHSS_BA1_mean_mat))
+count.peaks <- apply(IHSS_BA1_dom, 2, function(c)sum(c!=0))
+IHSS_BA1_mean_mat <- as.data.frame(cbind(IHSS_BA1_mean_mat, count.peaks))
+IHSS_BA1_mean_mat$C.N <- IHSS_BA1_mean_mat$C/IHSS_BA1_mean_mat$N
+IHSS_BA1_mean_mat$C.P <- IHSS_BA1_mean_mat$C/IHSS_BA1_mean_mat$P
+IHSS_BA1_mean_mat$C.S <- IHSS_BA1_mean_mat$C/IHSS_BA1_mean_mat$S
+
+#include counts
+IHSS_BA1_Chem.pa <- IHSS_BA1_Chem; IHSS_BA1_Chem.pa[IHSS_BA1_Chem.pa >0] <- 1
+IHSS_BA1_domt.pa <- IHSS_BA1_domt; IHSS_BA1_domt.pa[IHSS_BA1_domt.pa >0] <- 1
+IHSS_BA1_dom.pa <- as.data.frame(t(IHSS_BA1_domt.pa))
+IHSS_BA1.mean_mat.pa <- matrix(NA,nrow = dim(IHSS_BA1_Chem)[2],ncol = dim(IHSS_BA1_dom)[2])
+for (j in 1:dim(IHSS_BA1_Chem)[2]) {
+  for(k in 1:dim(IHSS_BA1_dom)[2]) {
+    IHSS_BA1.mean_mat.pa[j,k] <- sum(IHSS_BA1_Chem.pa[,j]*IHSS_BA1_dom.pa[,k])
+  }
+}
+IHSS_BA1_mean_mat.pa <- as.data.frame(IHSS_BA1.mean_mat.pa)
+colnames(IHSS_BA1_mean_mat.pa) <- colnames(IHSS_BA1_dom)
+row.names(IHSS_BA1_mean_mat.pa) <- colnames(IHSS_BA1_Chem)
+IHSS_BA1_mean_mat.pa <- as.data.frame(t(IHSS_BA1_mean_mat.pa))
+IHSS_BA1_mean_mat$S.count <- IHSS_BA1_mean_mat.pa$S
+IHSS_BA1_mean_mat$N.count <- IHSS_BA1_mean_mat.pa$N
+IHSS_BA1_mean_mat$P.count <- IHSS_BA1_mean_mat.pa$P
+
+IHSS_BA1_mean_mat = IHSS_BA1_mean_mat %>% 
+  replace(is.na(.), 0)
+  
+IHSS_BA1_mean_mat <- remove_zero_cols(IHSS_BA1_mean_mat)
+
+```
+
+### 3.6.5 PCoA
+
+
+```{r}
+
+# Add methods to mean_mat
+
+envdata <-IHSS_BA1_mean_mat %>%
+  rownames_to_column(var = "SampleName")%>%
+  left_join(IHSS_BA1_env, by = "SampleName") %>%
+  column_to_rownames(var = "SampleName") %>%
+  dplyr::rename(mol.mass = reference)
+
+# selct important coulmns for PCoA
+
+envdata_select <- envdata %>%
+  dplyr::select(mol.mass, H.C, O.C, AI, AI.mod, DBE, Aromatic, Aromatic.O_rich, Aromatic.O_poor, Highly.unsaturated, Highly.unsaturated.O_rich, Highly.unsaturated.O_poor, Unsaturated, Unsaturated.O_rich, Unsaturated.O_poor, Unsaturated.with.N, Saturated, Saturated.O_rich, Saturated.O_poor, Lipids, Proteins, AminoSugars, Carbohydrates, Unknown, NOSC, C.N, C.P, C.S, Method)
+
+#no Saturated and Amino sugars in data / N.C not inside for 3 replicates
+
+#create vectors vor PCoA
+
+IHSS_BA1.comm <-IHSS_BA1_norm %>% 
+  column_to_rownames("SampleName")
+
+IHSS_BA1.comm <- t(IHSS_BA1.comm)
+
+IHSS_BA1_dom.dist <- vegdist(t(IHSS_BA1.comm), method="bray") 
+
+IHSS_BA1_dom.pcoa <- cmdscale(IHSS_BA1_dom.dist, k=4, eig=T)
+
+scree <- cumsum(IHSS_BA1_dom.pcoa$eig)/sum(IHSS_BA1_dom.pcoa$eig);plot(scree);head(scree)
+
+envfit2 <- envdata_select %>%
+  dplyr::select(mol.mass, H.C, O.C, AI, AI.mod, DBE, Aromatic, Aromatic.O_rich, Aromatic.O_poor, Highly.unsaturated, Highly.unsaturated.O_rich, Highly.unsaturated.O_poor, Unsaturated, Unsaturated.O_rich, Unsaturated.O_poor, Unsaturated.with.N, Saturated, Saturated.O_rich, Saturated.O_poor,) %>% 
+  mutate_all(function(x) ifelse(is.infinite(x), 0, x))  
+
+                                       
+
+IHSS_BA1.envfit2 <- envfit(IHSS_BA1_dom.pcoa, envfit2, permutations=999, choices=c(1,2), na.rm=F)
+
+#PCoA
+
+pcoadat<-data.frame(IHSS_BA1_dom.pcoa$points)
+
+pcoadat$sample<-row.names(pcoadat)
+
+pcoadat = pcoadat %>% 
+  add_column(group = c("Blank","Blank","Blank","Blank","Blank","Blank","SPE-DOM","SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","STD", "PBlank", "PBlank")) %>% 
+  add_column(Method =IHSS_BA1_env$Method)
+
+names(pcoadat)
+
+IHSS_BA1.envfit2$vectors
+
+arrows<-IHSS_BA1.envfit2$vectors$arrows %>% data.frame() 
+
+arrows$p.val<-IHSS_BA1.envfit2$vectors$pvals
+
+arrows$type<-row.names(arrows)
+
+scale<-2
+
+arrows<-mutate(arrows,Dim1=Dim1/scale,Dim2=Dim2/scale)
+
+svg("PCoA_IHSS_BA3.svg", width = 9, height = 6, pointsize = 12)
+
+PCoA_1 <- ggplot(data=pcoadat,aes(x=X1,y=X2))+
+  geom_point(size=3,aes(col=sample, shape = group)) +
+  geom_segment(data=filter(arrows,p.val <= 0.001),aes(x=0,xend=Dim1,y=0,yend=Dim2), arrow = arrow(length = unit(0.025, "npc")),colour="grey") +
+    geom_text(data=filter(arrows,p.val<=0.001),aes(x=Dim1,y=Dim2,label=type),size=3,vjust=2, position = position_dodge(width = .9))+
+  guides(col=guide_legend('Samples'))+
+  labs(y='PCo2 (17.4%)',x='PCo1 (21.4%)')+
+  #coord_fixed(xlim = c(-0.6,0.6),ylim=c(-0.6,0.6))+
+  theme_minimal()
+
+PCoA_1
+
+
+dev.off()
+```
+
+
+
+
+## 3.1 Ion search / MDL and sample_junction (ICBM-OCEAN without sample junction)
+
+### 3.1.1 Load data
+
+```{r}
+#load ICBM-OCEAN sample junction data of STD / spike / Alcohol
+# load full spike
+
+spike = read.csv("ICBM_OCEAN/Sample junction/Spike.csv", header = T, stringsAsFactors = F)
+
+spike_D = read.csv("ICBM_OCEAN/Sample junction/Spike_D.csv", header = T, stringsAsFactors = F)
+
+#load spike 2
+
+STD = read.csv("ICBM_OCEAN/Sample junction/STD.csv", header = T, stringsAsFactors = F)
+
+STD_D = read.csv("ICBM_OCEAN/Sample junction/STD_D.csv", header = T, stringsAsFactors = F)
+
+#load std mixes (non-processed)
+
+Stock = read.csv("ICBM_OCEAN/Sample junction/STOCK_STD.csv", header = T, stringsAsFactors = F)
+
+#Alc
+
+ALC = read.csv("ICBM_OCEAN/Sample junction/ALC.csv", header = T, stringsAsFactors = F)
+
+ALC_D = read.csv("ICBM_OCEAN/Sample junction/ALC_D.csv", header = T, stringsAsFactors = F)
+
+#NSW
+
+NSW = read.csv("ICBM_OCEAN/AE_NSW/Sample_junction_NSW.csv", header = T, stringsAsFactors = F)
+
+NSW_D = read.csv("ICBM_OCEAN/AE_NSW/Sample_junction_NSW_D.csv", header = T, stringsAsFactors = F)
+
+#AE
+
+AE = read.csv("ICBM_OCEAN/AE_NSW/Sample_junction_AE.csv", header = T, stringsAsFactors = F)
+
+AE_D = read.csv("ICBM_OCEAN/AE_NSW/Sample_junction_AE_D.csv", header = T, stringsAsFactors = F)
+
+```
+
+### 3.1.2 rename data frames
+
+```{r}
+
+#select important columns without samples and separate in chemical data and samples with mz
+
+# spike 
+
+spike_df = spike %>% 
+  select(1,2,7:ncol(spike)) %>% 
+  dplyr::rename_all(~c("mz", "MDL","PB_B1_01", "PB_B1_02", "PB_B1_03", "PB_B2_01", "PB_B2_02", "PB_B2_03","STD_01_01", "STD_01_02", "STD_01_03", "STD_02_01", "STD_02_02", "STD_02_03")) %>% 
+  replace(is.na(.), 0)
+
+spike_D_df = spike_D %>% 
+  select(1,2,7:ncol(spike_D)) %>% 
+  dplyr::rename_all(~c("mz", "MDL","B_B1_01", "B_B1_02", "B_B1_03", "B_B2_01", "B_B2_02", "B_B2_03","STD_D1_01", "STD_D1_02", "STD_D1_03", "STD_D2_01", "STD_D2_02", "STD_D2_03")) %>% 
+  replace(is.na(.), 0)
+
+# STD 
+
+STD_df = STD %>% 
+  select(1,2,7:ncol(STD)) %>% 
+  dplyr::rename_all(~c("mz", "MDL","PB_4_01", "PB_4_02", "PB_4_03", "STD1_B1_01", "STD1_B1_02", "STD1_B1_03", "STD1_B2_01", "STD1_B2_02", "STD1_B2_03")) %>% 
+  replace(is.na(.), 0)
+
+STD_D_df = STD_D %>% 
+  select(1,2,7:ncol(STD_D)) %>% 
+  dplyr::rename_all(~c("mz", "MDL","PB_5_01", "PB_5_02", "PB_5_03", "STD10_A1_01", "STD10_A1_02", "STD10_A1_03", "STD10_A2_01", "STD10_A2_02", "STD10_A2_03","STD1_A1_01", "STD1_A1_02", "STD1_A1_03", "STD1_A2_01", "STD1_A2_02", "STD1_A2_03","STD01_A1_01", "STD01_A1_02", "STD01_A1_03", "STD01_A2_01", "STD01_A2_02", "STD01_A2_03")) %>% 
+  replace(is.na(.), 0)
+
+#stock solutions
+
+Stock_df = Stock %>% 
+  select(1,2,7:ncol(Stock)) %>% 
+  dplyr::rename_all(~c("mz", "MDL","Stock_1_01", "Stock_1_02", "Stock_1_03", "Stock_2_01", "Stock_2_02", "Stock_2_03", "Stock_3_01", "Stock_3_02", "Stock_3_03", "Stock_all_01", "Stock_all_02", "Stock_all_03")) %>% 
+  replace(is.na(.), 0)
+
+#ALC 
+
+ALC_df = ALC %>% 
+  select(1,2,7:ncol(ALC)) %>% 
+  dplyr::rename_all(~c("mz", "MDL","PB_A1_01","PB_A1_02","PB_A1_03","PB_A2_01","PB_A2_02","PB_A2_03","ALC_01_01","ALC_01_02","ALC_01_03","ALC_02_01","ALC_02_02","ALC_02_03","ALC_03_01","ALC_03_02","ALC_03_03")) %>% 
+  replace(is.na(.), 0)
+
+ALC_D_df = ALC_D %>% 
+  select(1,2,7:ncol(ALC_D)) %>% 
+  dplyr::rename_all(~c("mz","MDL","B_A1_01","B_A1_02","B_A1_03","B_A2_01","B_A2_02","B_A2_03","ALC.D1_01_01","ALC.D1_01_02","ALC.D1_01_03","ALC.D1_02_01","ALC.D1_02_02","ALC.D1_02_03","ALC.D1_03_01","ALC.D1_03_02","ALC.D1_03_03","ALC.D2_01_01","ALC.D2_01_02","ALC.D2_01_03","ALC.D2_02_01","ALC.D2_02_02","ALC.D2_02_03","ALC.D2_03_01","ALC.D2_03_02","ALC.D2_03_03","ALC.D3_01_01","ALC.D3_01_02","ALC.D3_01_03"
+,"ALC.D3_02_01","ALC.D3_02_02","ALC.D3_02_03","ALC.D3_03_01","ALC.D3_03_02","ALC.D3_03_03")) %>% 
+  replace(is.na(.), 0)
+
+#NSW
+
+NSW_df = NSW %>% 
+  select(1,2,7:ncol(NSW)) %>% 
+  dplyr::rename_all(~c("mz","MDL","PB_04_01","PB_04_02","PB_04_03","NSW_01_01","NSW_01_02","NSW_01_03","NSW_02_01","NSW_02_02","NSW_02_03","NSWpH2_01_01","NSWpH2_01_02","NSWpH2_01_03","NSWpH2_02_01","NSWpH2_02_02","NSWpH2_02_03")) %>% 
+  replace(is.na(.), 0)
+
+NSW_D_df = NSW_D %>% 
+  select(1,2,7:ncol(NSW_D)) %>% 
+  dplyr::rename_all(~c("mz","MDL","PB_05_01","PB_05_02","PB_05_03","NSW.D_01_01","NSW.D_01_02","NSW.D_01_03","NSW.D_02_01","NSW.D_02_02","NSW.D_02_03","NSWpH2.D_01_01","NSWpH2.D_01_02","NSWpH2.D_01_03","NSWpH2.D_02_01","NSWpH2.D_02_02","NSWpH2.D_02_03")) %>% 
+  replace(is.na(.), 0)
+
+#AE
+
+AE_df = AE %>% 
+  select(1,2,7:ncol(AE)) %>% 
+  dplyr::rename_all(~c("mz","MDL","PB_B1_1","PB_B1_2","PB_B1_3","PB_B2_1","PB_B2_2","PB_B2_3","AE_S1_1","AE_S1_2","AE_S1_3","AE_S2_1","AE_S2_2","AE_S2_3","AE_S3_1","AE_S3_2","AE_S3_3","AE_1_1","AE_1_2","AE_1_3","AE_2_1","AE_2_2","AE_2_3","AE_3_1","AE_3_2","AE_3_3","AE_4_1","AE_4_2","AE_4_3","AE_5_1","AE_5_2","AE_5_3")) %>% 
+  replace(is.na(.), 0)
+
+AE_D_df = AE_D %>% 
+  select(1,2,7:ncol(AE_D)) %>% 
+  dplyr::rename_all(~c("mz","MDL","B_B1_1","B_B1_2","B_B1_3","B_B2_1","B_B2_2","B_B2_3","AE_DS1_1","AE_DS1_2","AE_DS1_3","AE_DS2_1","AE_DS2_2","AE_DS2_3","AE_DS3_1","AE_DS3_2","AE_DS3_3","AE_D1_1","AE_D1_2","AE_D1_3","AE_D2_1","AE_D2_2","AE_D2_3","AE_D3_1","AE_D3_2","AE_D3_3","AE_D4_1","AE_D4_2","AE_D4_3","AE_D5_1","AE_D5_2","AE_D5_3")) %>% 
+  replace(is.na(.), 0)
+
+
+
+```
+
+
+### 3.1.6 Data clean up (contaminant removal)
+
+
+```{r}
+# clean contaminants based on S/MDL ratio (filter function < 1 = all blank peaks)
+
+#spike
+  
+
+#select only BA
+
+spike_df_BA = spike_df %>% 
+  filter( mz > 121.02938, mz < 121.02962)
+
+spike_D_df_BA = spike_D_df %>% 
+  filter( mz > 121.02938, mz < 121.02962)
+
+STD_df_BA = STD_df %>% 
+  filter( mz > 121.02938, mz < 121.02962)
+
+STD_D_df_BA = STD_D_df %>% 
+  filter( mz > 121.02938, mz < 121.02962)
+
+ALC_df_BA = ALC_df %>% 
+  filter( mz > 121.02938, mz < 121.02962)
+
+ALC_D_df_BA = ALC_D_df %>% 
+  filter( mz > 121.02938, mz < 121.02962)
+
+NSW_df_BA = NSW_df %>% 
+  filter( mz > 121.02938, mz < 121.02962)
+
+NSW_D_df_BA = NSW_D_df %>% 
+  filter( mz > 121.02938, mz < 121.02962)
+
+AE_df_BA = AE_df %>% 
+  filter( mz > 121.02938, mz < 121.02962)
+
+AE_D_df_BA = AE_D_df %>% 
+  filter( mz > 121.02938, mz < 121.02962)
+
+
+
+spike_df_noCont = spike_df %>% 
+  mutate(BlankMax = pmax(PB_B1_01, PB_B1_02, PB_B1_03, PB_B2_01, PB_B2_02, PB_B2_03)) %>%
+  mutate(S_MDLratio = BlankMax/MDL) %>%
+  filter(S_MDLratio < 1) %>% 
+  select(-BlankMax, -S_MDLratio) %>% 
+  union(spike_df_BA) %>%
+  select(-PB_B1_01, -PB_B1_02, -PB_B1_03, -PB_B2_01, -PB_B2_02, -PB_B2_03, -MDL)
+
+spike_D_df_noCont = spike_D_df %>% 
+  mutate(BlankMax = pmax(B_B1_01, B_B1_02, B_B1_03, B_B2_01, B_B2_02, B_B2_03)) %>%
+  mutate(S_MDLratio = BlankMax/MDL) %>%
+  filter(S_MDLratio < 1) %>% 
+  select(-BlankMax, -S_MDLratio) %>% 
+  union(spike_D_df_BA) %>% 
+  select(-B_B1_01, -B_B1_02, -B_B1_03, -B_B2_01, -B_B2_02, -B_B2_03, -MDL)
+
+
+#STD
+
+STD_df_noCont = STD_df %>% 
+  mutate(BlankMax = pmax(PB_4_01, PB_4_02, PB_4_03)) %>%
+  mutate(S_MDLratio = BlankMax/MDL) %>%
+  filter(S_MDLratio < 1) %>% 
+  select(-BlankMax, -S_MDLratio) %>% 
+  union(STD_df_BA) %>% 
+  select(-PB_4_01, -PB_4_02, -PB_4_03, -MDL) 
+
+STD_D_df_noCont = STD_D_df %>% 
+  mutate(BlankMax = pmax(PB_5_01, PB_5_02, PB_5_03)) %>%
+  mutate(S_MDLratio = BlankMax/MDL) %>%
+  filter(S_MDLratio < 1) %>% 
+  select(-BlankMax, -S_MDLratio) %>% 
+  union(STD_D_df_BA) %>% 
+  select(-PB_5_01, -PB_5_02, -PB_5_03,-MDL) 
+
+#STD mix (No blanks... delete below threshold?)
+
+#ALC
+
+ALC_df_noCont = ALC_df %>% 
+  mutate(BlankMax = pmax(PB_A1_01,PB_A1_02,PB_A1_03,PB_A2_01,PB_A2_02,PB_A2_03)) %>%
+  mutate(S_MDLratio = BlankMax/MDL) %>%
+  filter(S_MDLratio < 1) %>% 
+  select(-BlankMax, -S_MDLratio) %>% 
+  union(ALC_df_BA) %>% 
+  select(-PB_A1_01,-PB_A1_02,-PB_A1_03,-PB_A2_01,-PB_A2_02,-PB_A2_03, -MDL)
+
+ALC_D_df_noCont = ALC_D_df %>% 
+  mutate(BlankMax = pmax(B_A1_01,B_A1_02,B_A1_03,B_A2_01,B_A2_02,B_A2_03)) %>%
+  mutate(S_MDLratio = BlankMax/MDL) %>%
+  filter(S_MDLratio < 1) %>% 
+  select(-BlankMax, -S_MDLratio) %>% 
+  union(ALC_D_df_BA) %>% 
+  select(-B_A1_01,-B_A1_02,-B_A1_03,-B_A2_01,-B_A2_02,-B_A2_03,-MDL)
+
+#NSW
+
+NSW_df_noCont = NSW_df %>% 
+  mutate(BlankMax = pmax(PB_04_01,PB_04_02,PB_04_03)) %>%
+  mutate(S_MDLratio = BlankMax/MDL) %>%
+  filter(S_MDLratio < 1) %>% 
+  select(-BlankMax, -S_MDLratio) %>% 
+  union(NSW_df_BA) %>% 
+  select(-PB_04_01,-PB_04_02,-PB_04_03, -MDL)
+
+NSW_D_df_noCont = NSW_D_df %>% 
+  mutate(BlankMax = pmax(PB_05_01,PB_05_02,PB_05_03)) %>%
+  mutate(S_MDLratio = BlankMax/MDL) %>%
+  filter(S_MDLratio < 1) %>% 
+  select(-BlankMax, -S_MDLratio) %>% 
+  union(NSW_D_df_BA) %>% 
+  select(-PB_05_01,-PB_05_02,-PB_05_03,-MDL)
+
+#AE
+
+AE_df_noCont = AE_df %>% 
+  mutate(BlankMax = pmax(PB_B1_1,PB_B1_2,PB_B1_3,PB_B2_1,PB_B2_2,PB_B2_3)) %>%
+  mutate(S_MDLratio = BlankMax/MDL) %>%
+  filter(S_MDLratio < 1) %>% 
+  select(-BlankMax, -S_MDLratio) %>% 
+  union(AE_df_BA) %>% 
+  select(-PB_B1_1,-PB_B1_2,-PB_B1_3,-PB_B2_1,-PB_B2_2,-PB_B2_3, -MDL)
+
+AE_D_df_noCont = AE_D_df %>% 
+  mutate(BlankMax = pmax(B_B1_1,B_B1_2,B_B1_3,B_B2_1,B_B2_2,B_B2_3)) %>%
+  mutate(S_MDLratio = BlankMax/MDL) %>%
+  filter(S_MDLratio < 1) %>% 
+  select(-BlankMax, -S_MDLratio) %>% 
+  union(AE_D_df_BA) %>% 
+  select(-B_B1_1,-B_B1_2,-B_B1_3,-B_B2_1,-B_B2_2,-B_B2_3,-MDL)
+
+```
+
+
+### 3.1.7 combining triplicate measurements
+
+Combination of triplicate measurement. Criteria: formulas that appear in all triplicate measurements
+
+```{r}
+
+#filter triplicate measurements if at least one contains a zero value & combine triplicate measurements by mean value (If it does not work: uninstall plyr package and use dplyr)
+
+#triplicates are combined when the value 
+
+#spike
+
+spike_df_noCont_comb = spike_df_noCont %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(mz, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0)
+
+spike_D_df_noCont_comb = spike_D_df_noCont %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(mz, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0)
+
+#STD
+ 
+STD_df_noCont_comb = STD_df_noCont %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(mz, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0)
+
+  
+STD_D_df_noCont_comb = STD_D_df_noCont %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(mz, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0)
+
+#Stock solution 
+
+Stock_df_comb = Stock_df %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(mz, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0)
+
+#ALC
+
+ALC_df_noCont_comb = ALC_df_noCont %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(mz, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0)
+
+ALC_D_df_noCont_comb = ALC_D_df_noCont %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(mz, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0)
+
+#NSW
+
+NSW_df_noCont_comb = NSW_df_noCont %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(mz, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0)
+
+NSW_D_df_noCont_comb = NSW_D_df_noCont %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(mz, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0)
+
+#AE
+
+AE_df_noCont_comb = AE_df_noCont %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(mz, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0)
+
+AE_D_df_noCont_comb = AE_D_df_noCont %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(mz, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0)
+
+#combining all tables (Problem: mz has to many digits. Only exact for 1 ppm. However, ion loop should still work)
+
+#put all data frames into list
+
+df_list <- list(spike_df_noCont_comb, spike_D_df_noCont_comb, STD_df_noCont_comb,STD_D_df_noCont_comb,Stock_df_comb,ALC_df_noCont_comb,ALC_D_df_noCont_comb)      
+
+#merge all data frames together
+all_STD = df_list %>% 
+  reduce(full_join, by='mz')
+
+all_STD[all_STD == 0 ] <- NA
+
+#put AE and NSW data frames into list
+
+df2_list <- list(NSW_df_noCont_comb, NSW_D_df_noCont_comb, AE_df_noCont_comb,AE_D_df_noCont_comb)      
+
+#merge all data frames together
+all_NSWAE = df2_list %>% 
+  reduce(full_join, by='mz')
+
+all_NSWAE[all_NSWAE == 0 ] <- NA
+
+
+
+```
+### 3.1.9 Ion Loop: seeking spezific ions
+
+The loop was written by very much appreciated help of Hagen Buck-Wiese.
+
+```{r}
+
+#load excel file with target ions
+target_ions<-read_xlsx(path = "Masslist/Ion_list _MH.xlsx") #only [M-H]-
+#target_ions<-read_xlsx(path = "Masslist/Ion_list.xlsx")
+
+#combine columns with different ions into two columns: one with ion type, one with mz
+target_ions_melted<-melt(target_ions, id.vars=c( "name", "mass", "formula"))
+
+#change column names
+colnames(target_ions_melted)<-c("name", "mass", "formula", "ion_type", "mz")
+
+
+# match target ions to spectra mzs
+resolution_ppm<-1L
+
+# define length of data set 
+
+nr_target_ions<-length(target_ions_melted[,1])
+
+# ion search loop - all_STD
+
+all_STD_ion = all_STD %>% 
+  gather(sample, I, -mz) %>% 
+  drop_na()
+
+colnames(all_STD_ion)<-c("mz", "sample", "I")
+
+hit_all<-data.frame(stringsAsFactors = F)
+
+for (i in (1:nr_target_ions)){
+  temp_target_ion_name<-target_ions_melted$name[i]
+  temp_target_ion_type<-as.character(target_ions_melted$ion_type[i])
+  temp_target_ion_mz<-target_ions_melted$mz[i]
+  temp_target_ion_mzrangemin<-as.numeric(temp_target_ion_mz)-as.numeric(temp_target_ion_mz)/1000000*resolution_ppm
+  temp_target_ion_mzrangemax<-as.numeric(temp_target_ion_mz)+as.numeric(temp_target_ion_mz)/1000000*resolution_ppm
+  
+  temp_candidates<-all_STD_ion %>%
+    group_by(sample)%>%
+    filter(mz>=temp_target_ion_mzrangemin & mz<=temp_target_ion_mzrangemax)
+
+    
+    if (length(temp_candidates[,1])!=0){
+      
+      rep_factor<-length(temp_candidates$mz)
+      ion_type<-rep(temp_target_ion_type, rep_factor)
+      ion_name<-rep(temp_target_ion_name, rep_factor)
+      target_mz<-rep(temp_target_ion_mz, rep_factor)
+      new<-data.frame(list(temp_candidates$mz,temp_candidates$I, temp_candidates$sample,
+                                                      ion_type, ion_name, 
+               target_mz))
+      colnames(new)<-c("mz", "I","sample", "ion_type", "ion_name", "target_mz")
+      hit_all<-rbind(hit_all, new)
+      colnames(hit_all)<-c("mz", "I", "sample", "ion_type", "ion_name", "target_mz")
+    }
+  temp_target_ion_type<-NULL
+  temp_target_ion_name<-NULL
+  temp_target_ion_mz<-NULL
+}
+
+head(hit_all)
+
+#normalize to BzAc or highest peak
+
+hit_all = hit_all %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  mutate(method = case_when(
+    str_detect(sample, "STD_D") ~ "D-SPE-DOM",
+    str_detect(sample, "Stock") ~ "Standard",
+    str_detect(sample, "ALC.D") ~ "D-SPE-DOM",
+    str_detect(sample, "ALC_0") ~ "SPE-DOM",
+    str_detect(sample, "_A") ~ "D-SPE-DOM",
+    str_detect(sample, "_B") ~ "SPE-DOM",
+    str_detect(sample, "STD_0") ~ "SPE-DOM")) %>% 
+  group_by(sample) 
+
+benzoo = filter(hit_all, mz == 121.02950) %>% 
+  mutate(I_benz=I)%>%
+  select(-I, -method,-mz,-ion_name,-ion_type,-target_mz)
+
+hit_all=hit_all %>%
+  left_join(.,benzoo, by='sample') %>% 
+  mutate(I_norm = case_when(method == "SPE-DOM" ~ I/max(I),
+                             method == "Standard" ~ I/max(I),                               
+                             method =="D-SPE-DOM" ~ I/I_benz)) %>% 
+  select(-I_benz)
+
+  
+
+# ion search loop - spike_ion
+
+spike_ion = all_STD %>% 
+  select(1:5,Stock_all) %>% 
+  gather(sample, I, -mz) %>% 
+  drop_na()
+
+colnames(spike_ion)<-c("mz", "sample", "I")
+
+hit_spike<-data.frame(stringsAsFactors = F)
+
+for (i in (1:nr_target_ions)){
+  temp_target_ion_name<-target_ions_melted$name[i]
+  temp_target_ion_type<-as.character(target_ions_melted$ion_type[i])
+  temp_target_ion_mz<-target_ions_melted$mz[i]
+  temp_target_ion_mzrangemin<-as.numeric(temp_target_ion_mz)-as.numeric(temp_target_ion_mz)/1000000*resolution_ppm
+  temp_target_ion_mzrangemax<-as.numeric(temp_target_ion_mz)+as.numeric(temp_target_ion_mz)/1000000*resolution_ppm
+  
+  temp_candidates<-spike_ion %>%
+    group_by(sample)%>%
+    filter(mz>=temp_target_ion_mzrangemin & mz<=temp_target_ion_mzrangemax)
+
+    
+    if (length(temp_candidates[,1])!=0){
+      
+      rep_factor<-length(temp_candidates$mz)
+      ion_type<-rep(temp_target_ion_type, rep_factor)
+      ion_name<-rep(temp_target_ion_name, rep_factor)
+      target_mz<-rep(temp_target_ion_mz, rep_factor)
+      new<-data.frame(list(temp_candidates$mz,temp_candidates$I, temp_candidates$sample,
+                                                      ion_type, ion_name, 
+               target_mz))
+      colnames(new)<-c("mz", "I","sample", "ion_type", "ion_name", "target_mz")
+      hit_spike<-rbind(hit_spike, new)
+      colnames(hit_spike)<-c("mz", "I", "sample", "ion_type", "ion_name", "target_mz")
+    }
+  temp_target_ion_type<-NULL
+  temp_target_ion_name<-NULL
+  temp_target_ion_mz<-NULL
+}
+
+head(hit_spike)
+
+#normalize to BzAc or highest peak
+
+hit_spike = hit_spike %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  mutate(method = case_when(
+    str_detect(sample, "STD_D") ~ "D-SPE-DOM",
+    str_detect(sample, "Stock") ~ "Standard",
+    str_detect(sample, "ALC.D") ~ "D-SPE-DOM",
+    str_detect(sample, "ALC_0") ~ "SPE-DOM",
+    str_detect(sample, "_A") ~ "D-SPE-DOM",
+    str_detect(sample, "_B") ~ "SPE-DOM",
+    str_detect(sample, "STD_0") ~ "SPE-DOM")) %>% 
+  group_by(sample) 
+
+benzoo = filter(hit_spike, mz == 121.02950) %>% 
+  mutate(I_benz=I)%>%
+  select(-I, -method,-mz,-ion_name,-ion_type,-target_mz)
+
+hit_spike=hit_spike %>%
+  left_join(.,benzoo, by='sample') %>% 
+  mutate(I_norm = case_when(method == "SPE-DOM" ~ I/max(I),
+                             method == "Standard" ~ I/max(I),                               
+                             method =="D-SPE-DOM" ~ I/I_benz)) %>% 
+  select(-I_benz)
+
+# ion search loop - all_STD
+
+STD_ion = all_STD %>% 
+  select(1,6:7,12:13,10:11,8:9,Stock_all)%>% 
+  gather(sample, I, -mz) %>% 
+  drop_na()
+
+colnames(STD_ion)<-c("mz", "sample", "I")
+
+hit_STD<-data.frame(stringsAsFactors = F)
+
+for (i in (1:nr_target_ions)){
+  temp_target_ion_name<-target_ions_melted$name[i]
+  temp_target_ion_type<-as.character(target_ions_melted$ion_type[i])
+  temp_target_ion_mz<-target_ions_melted$mz[i]
+  temp_target_ion_mzrangemin<-as.numeric(temp_target_ion_mz)-as.numeric(temp_target_ion_mz)/1000000*resolution_ppm
+  temp_target_ion_mzrangemax<-as.numeric(temp_target_ion_mz)+as.numeric(temp_target_ion_mz)/1000000*resolution_ppm
+  
+  temp_candidates<-STD_ion %>%
+    group_by(sample)%>%
+    filter(mz>=temp_target_ion_mzrangemin & mz<=temp_target_ion_mzrangemax)
+
+    
+    if (length(temp_candidates[,1])!=0){
+      
+      rep_factor<-length(temp_candidates$mz)
+      ion_type<-rep(temp_target_ion_type, rep_factor)
+      ion_name<-rep(temp_target_ion_name, rep_factor)
+      target_mz<-rep(temp_target_ion_mz, rep_factor)
+      new<-data.frame(list(temp_candidates$mz,temp_candidates$I, temp_candidates$sample,
+                                                      ion_type, ion_name, 
+               target_mz))
+      colnames(new)<-c("mz", "I","sample", "ion_type", "ion_name", "target_mz")
+      hit_STD<-rbind(hit_STD, new)
+      colnames(hit_STD)<-c("mz", "I", "sample", "ion_type", "ion_name", "target_mz")
+    }
+  temp_target_ion_type<-NULL
+  temp_target_ion_name<-NULL
+  temp_target_ion_mz<-NULL
+}
+
+head(hit_STD)
+
+#normalize to BzAc or highest peak
+
+hit_STD = hit_STD %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  mutate(method = case_when(
+    str_detect(sample, "STD_D") ~ "D-SPE-DOM",
+    str_detect(sample, "Stock") ~ "Standard",
+    str_detect(sample, "ALC.D") ~ "D-SPE-DOM",
+    str_detect(sample, "ALC_0") ~ "SPE-DOM",
+    str_detect(sample, "_A") ~ "D-SPE-DOM",
+    str_detect(sample, "_B") ~ "SPE-DOM",
+    str_detect(sample, "STD_0") ~ "SPE-DOM")) %>% 
+  group_by(sample) 
+
+benzoo = filter(hit_STD, mz == 121.02950) %>% 
+  mutate(I_benz=I)%>%
+  select(-I, -method,-mz,-ion_name,-ion_type,-target_mz)
+
+hit_STD=hit_STD %>%
+  left_join(.,benzoo, by='sample') %>% 
+  mutate(I_norm = case_when(method == "SPE-DOM" ~ I/max(I),
+                             method == "Standard" ~ I/max(I),                               
+                             method =="D-SPE-DOM" ~ I/I_benz)) %>% 
+  select(-I_benz)
+
+# ion search loop - all_ALC
+
+ALC_ion = all_STD %>% 
+  select(1,18:29,Stock_1,Stock_2)%>% 
+  gather(sample, I, -mz) %>% 
+  drop_na()
+
+colnames(ALC_ion)<-c("mz", "sample", "I")
+
+hit_ALC <-data.frame(stringsAsFactors = F)
+
+for (i in (1:nr_target_ions)){
+  temp_target_ion_name<-target_ions_melted$name[i]
+  temp_target_ion_type<-as.character(target_ions_melted$ion_type[i])
+  temp_target_ion_mz<-target_ions_melted$mz[i]
+  temp_target_ion_mzrangemin<-as.numeric(temp_target_ion_mz)-as.numeric(temp_target_ion_mz)/1000000*resolution_ppm
+  temp_target_ion_mzrangemax<-as.numeric(temp_target_ion_mz)+as.numeric(temp_target_ion_mz)/1000000*resolution_ppm
+  
+  temp_candidates<-ALC_ion %>%
+    group_by(sample)%>%
+    filter(mz>=temp_target_ion_mzrangemin & mz<=temp_target_ion_mzrangemax)
+
+    
+    if (length(temp_candidates[,1])!=0){
+      
+      rep_factor<-length(temp_candidates$mz)
+      ion_type<-rep(temp_target_ion_type, rep_factor)
+      ion_name<-rep(temp_target_ion_name, rep_factor)
+      target_mz<-rep(temp_target_ion_mz, rep_factor)
+      new<-data.frame(list(temp_candidates$mz,temp_candidates$I, temp_candidates$sample,
+                                                      ion_type, ion_name, 
+               target_mz))
+      colnames(new)<-c("mz", "I","sample", "ion_type", "ion_name", "target_mz")
+      hit_ALC<-rbind(hit_ALC, new)
+      colnames(hit_ALC)<-c("mz", "I", "sample", "ion_type", "ion_name", "target_mz")
+    }
+  temp_target_ion_type<-NULL
+  temp_target_ion_name<-NULL
+  temp_target_ion_mz<-NULL
+}
+
+head(hit_ALC)
+
+#normalize to BzAc or highest peak
+
+hit_ALC = hit_ALC %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  mutate(method = case_when(
+    str_detect(sample, "STD_D") ~ "D-SPE-DOM",
+    str_detect(sample, "Stock") ~ "Standard",
+    str_detect(sample, "ALC.D") ~ "D-SPE-DOM",
+    str_detect(sample, "ALC_0") ~ "SPE-DOM",
+    str_detect(sample, "_A") ~ "D-SPE-DOM",
+    str_detect(sample, "_B") ~ "SPE-DOM",
+    str_detect(sample, "STD_0") ~ "SPE-DOM")) %>% 
+  group_by(sample) 
+
+benzoo = filter(hit_ALC, mz == 121.02950) %>% 
+  mutate(I_benz=I)%>%
+  select(-I, -method,-mz,-ion_name,-ion_type,-target_mz)
+
+hit_ALC=hit_ALC %>%
+  left_join(.,benzoo, by='sample') %>% 
+  mutate(I_norm = case_when(method == "SPE-DOM" ~ I/max(I),
+                             method == "Standard" ~ I/max(I),                               
+                             method =="D-SPE-DOM" ~ I/I_benz)) %>% 
+  select(-I_benz)
+
+# ion search loop - all_NSWAE
+
+# match target ions to spectra mzs
+
+resolution_ppm<-0.1L
+
+NSWAE_ion = all_NSWAE %>% 
+  gather(sample, I, -mz) %>% 
+  drop_na()
+
+colnames(NSWAE_ion)<-c("mz", "sample", "I")
+
+hit_NSWAE <-data.frame(stringsAsFactors = F)
+
+for (i in (1:nr_target_ions)){
+  temp_target_ion_name<-target_ions_melted$name[i]
+  temp_target_ion_type<-as.character(target_ions_melted$ion_type[i])
+  temp_target_ion_mz<-target_ions_melted$mz[i]
+  temp_target_ion_mzrangemin<-as.numeric(temp_target_ion_mz)-as.numeric(temp_target_ion_mz)/1000000*resolution_ppm
+  temp_target_ion_mzrangemax<-as.numeric(temp_target_ion_mz)+as.numeric(temp_target_ion_mz)/1000000*resolution_ppm
+  
+  temp_candidates<-NSWAE_ion %>%
+    group_by(sample)%>%
+    filter(mz>=temp_target_ion_mzrangemin & mz<=temp_target_ion_mzrangemax)
+
+    
+    if (length(temp_candidates[,1])!=0){
+      
+      rep_factor<-length(temp_candidates$mz)
+      ion_type<-rep(temp_target_ion_type, rep_factor)
+      ion_name<-rep(temp_target_ion_name, rep_factor)
+      target_mz<-rep(temp_target_ion_mz, rep_factor)
+      new<-data.frame(list(temp_candidates$mz,temp_candidates$I, temp_candidates$sample,
+                                                      ion_type, ion_name, 
+               target_mz))
+      colnames(new)<-c("mz", "I","sample", "ion_type", "ion_name", "target_mz")
+      hit_NSWAE<-rbind(hit_NSWAE, new)
+      colnames(hit_NSWAE)<-c("mz", "I", "sample", "ion_type", "ion_name", "target_mz")
+    }
+  temp_target_ion_type<-NULL
+  temp_target_ion_name<-NULL
+  temp_target_ion_mz<-NULL
+}
+
+head(hit_NSWAE)
+
+#normalize to BzAc or highest peak
+
+hit_NSWAE = hit_NSWAE %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  mutate(method = case_when(
+    str_detect(sample, ".D") ~ "D-SPE-DOM",
+    str_detect(sample, "Stock") ~ "Standard",
+    str_detect(sample, "_D") ~ "D-SPE-DOM",
+    str_detect(sample, "NSW_") ~ "SPE-DOM",
+    str_detect(sample, "AE_") ~ "SPE-DOM",
+    str_detect(sample, "AE_D") ~ "D-SPE-DOM",
+    str_detect(sample, "NSWpH2_") ~ "SPE-DOM")) %>% 
+  group_by(sample) 
+
+benzoo = filter(hit_NSWAE, mz == 121.02950) %>% 
+  mutate(I_benz=I)%>%
+  select(-I, -method,-mz,-ion_name,-ion_type,-target_mz)
+
+hit_NSWAE=hit_NSWAE %>%
+  left_join(.,benzoo, by='sample') %>% 
+  mutate(I_norm = case_when(method == "SPE-DOM" ~ I/max(I),
+                             method == "Standard" ~ I/max(I),                               
+                             method =="D-SPE-DOM" ~ I/I_benz)) %>% 
+  select(-I_benz)
+
+```
+
+### 3.3.132 Plot hits
+
+```{R}
+
+#all STDs#56B4E9
+
+Farb = c("Standard"="#0072B2","D-SPE-DOM"="#56B4E9", "SPE-DOM"="#E69F00")
+
+svg("All_ion_plot.svg", width = 16/2.54 , height = 7.4/2.54, pointsize = 12)
+
+All_ion_plot <- ggplot(hit_all, aes(x = ion_name, y = sample, size = I_norm, color = method))+
+  geom_point() +
+  scale_colour_manual(values = Farb) +
+  coord_flip() + 
+  scale_x_discrete(limits = rev(levels(hit_all$ion_name))) +
+  scale_size_continuous(name="I (norm)", breaks = c(0.001, 0.01, 0.1, 0.25, 0.5, 0.75 ,1)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1, size = 11))
+
+All_ion_plot
+
+dev.off()
+
+
+#spike
+
+svg("spike_ion_plot.svg", width = 16/2.54 , height = 7.4/2.54, pointsize = 12)
+
+spike_ion_plot <- ggplot(hit_spike, aes(x = ion_name, y = sample, size = I_norm ,color = method))+
+  geom_point() +
+  scale_colour_manual(values = Farb) +
+  coord_flip() + 
+  scale_x_discrete(limits = rev(levels(hit_spike$ion_name))) +
+  scale_size_continuous(name="I (norm)", breaks = c(0.001, 0.01, 0.1, 0.25, 0.5, 0.75 ,1)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1, size = 11))
+
+spike_ion_plot
+
+dev.off()
+
+#STD
+
+svg("STD_ion_plot.svg", width = 16/2.54 , height = 7.4/2.54, pointsize = 12)
+
+STD_ion_plot <- ggplot(hit_STD, aes(x = ion_name, y = sample, size = I_norm ,color = method))+
+  geom_point() +
+  scale_colour_manual(values = Farb) +
+  coord_flip() + 
+  scale_x_discrete(limits = rev(levels(hit_STD$ion_name))) +
+  scale_size_continuous(name="I (norm)", breaks = c(0.001, 0.01, 0.1, 0.25, 0.5, 0.75 ,1)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1, size = 11))
+
+STD_ion_plot
+
+dev.off()
+
+
+STD_conc = hit_STD %>% 
+  filter(method == "D-SPE-DOM") %>% 
+  select(sample, ion_name, I_norm) %>% 
+  mutate(conc = case_when(
+    str_detect(sample, "STD10_") ~ "10",
+    str_detect(sample, "STD1_") ~ "1",
+    str_detect(sample, "STD01_") ~ "0.01")) %>% 
+    mutate(sample_name = case_when(
+    str_detect(sample, "STD10_") ~ "STD10",
+    str_detect(sample, "STD1_") ~ "STD1",
+    str_detect(sample, "STD01_") ~ "STD001"))
+
+STD_conc$conc = as.numeric(STD_conc$conc)
+
+STD_conc_1 <- STD_conc %>% 
+  group_by(ion_name,conc, sample_name) %>% 
+  summarize(mean = mean(I_norm), n = n(), 
+              sd = sd(I_norm), se = sd/sqrt(n))
+
+STD_panto = STD_conc_1 %>% 
+  filter(ion_name == "30_Pantothenic_acid_D")
+
+write.csv(STD_panto,"STD_panto.csv", row.names = FALSE)
+
+STD_gluco= STD_conc_1 %>% 
+  filter(ion_name == "28_Glucosamine_D")
+
+write.csv(STD_gluco,"STD_gluco.csv", row.names = FALSE)
+
+STD_GABA= STD_conc_1 %>% 
+  filter(ion_name == "27_GABA_D")
+
+write.csv(STD_GABA,"STD_GABA.csv", row.names = FALSE)
+
+svg("STD_panto_plot.svg", width = 7.4/2.54 , height = 7.4/2.54, pointsize = 12)
+
+STD_panto_plot = ggplot(STD_panto, aes(x=sample_name, y=mean)) + 
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="black", width=.2) +
+  geom_point(size=3, color = "#F0E442") +  
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1, size = 11)) +
+  xlab("Pantothenic acid")+
+  ylab("I (normalized to BzAc)")
+
+STD_panto_plot
+
+dev.off()
+
+svg("STD_gluco_plot.svg", width = 7.4/2.54 , height = 7.4/2.54, pointsize = 12)
+
+STD_gluco_plot = ggplot(STD_gluco, aes(x=sample_name, y=mean)) + 
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="black", width=.2) +
+  geom_point(size=3,color = "#D55E00") +  
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1, size = 11))+
+  xlab("Glucosamine")+
+  ylab("I (normalized to BzAc)")
+
+STD_gluco_plot
+
+dev.off()
+
+svg("STD_GABA_plot.svg", width = 7.4/2.54 , height = 7.4/2.54, pointsize = 12)
+
+STD_GABA_plot = ggplot(STD_GABA, aes(x=sample_name, y=mean)) + 
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), colour="black", width=.2) +
+  geom_point(size=3,color = "#CC79A7") +  
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1, size = 11))+
+  xlab("γ-aminobutyric acid")+
+  ylab("I (normalized to BzAc)")
+
+STD_GABA_plot
+
+dev.off()
+
+
+#ALC
+
+svg("ALC_ion_plot.svg", width = 16/2.54 , height = 7.4/2.54, pointsize = 12)
+
+ALC_ion_plot <- ggplot(hit_ALC, aes(x = ion_name, y = sample, size = I_norm ,color = method))+
+  geom_point() +
+  scale_colour_manual(values = Farb) +
+  coord_flip() + 
+    scale_x_discrete(limits = rev(levels(hit_ALC$ion_name))) +
+  scale_size_continuous(name="I (norm)", breaks = c(0.001, 0.01, 0.1, 0.25, 0.5, 0.75 ,1)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1, size = 11))
+
+  
+ALC_ion_plot
+
+dev.off()
+
+#pantothenic acid / GABA ions
+
+#STD
+
+hit_STD_ion = hit_STD %>% 
+  filter(sample == "STD10_A1" | sample == "STD10_A2") %>% 
+  filter(ion_name == "11_Pantothenic_acid")
+
+hit_STD_ion_2 = hit_STD %>% 
+  filter(sample == "STD10_A1" | sample == "STD10_A2") %>% 
+  filter(ion_name == "30_Pantothenic_acid_D")
+
+Farb2= c("11_Pantothenic_acid"="#0072B2")
+
+svg("STD_ion_plot_pantothenic_acid.svg", width = 16/2.54 , height = 7.4/2.54, pointsize = 12)
+
+STD_ion_plot_pantothenic_acid <- ggplot(hit_STD_ion, aes(x = sample, y = ion_type, size = I_norm ,color = ion_name))+
+  geom_point() +
+  scale_colour_manual(values = Farb2) +
+  coord_flip() + 
+  scale_x_discrete(limits = rev(levels(hit_STD_ion$ion_name))) +
+  scale_size_continuous(name="I (norm)", breaks = c(0.0011, 0.005, 0.01, 0.02)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1, size = 11))
+
+STD_ion_plot_pantothenic_acid
+
+dev.off()
+
+Farb3= c("30_Pantothenic_acid_D"="#56B4E9")
+
+svg("STD_ion_plot_pantothenic_acid_D.svg", width = 16/2.54 , height = 7.4/2.54, pointsize = 12)
+
+STD_ion_plot_pantothenic_acid_D <- ggplot(hit_STD_ion_2, aes(x = sample, y = ion_type, size = I_norm ,color = ion_name))+
+  geom_point() +
+  scale_colour_manual(values = Farb3) +
+  coord_flip() + 
+  scale_x_discrete(limits = rev(levels(hit_STD_ion_2$ion_name))) +
+  scale_size_continuous(name="I (norm)", breaks = c(0.0011, 0.01, 0.01, 0.1, 1 ,5)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1, size = 11))
+
+STD_ion_plot_pantothenic_acid_D
+
+dev.off()
+
+#NSWs & AEs
+
+Farb = c("Standard"="#0072B2","D-SPE-DOM"="#56B4E9", "SPE-DOM"="#E69F00")
+
+hit_NSWAE_1 = hit_NSWAE %>% 
+  filter(I_norm >= 0.0001) %>% 
+  filter(str_detect(sample, "AE"))
+
+hit_NSWAE_2 = hit_NSWAE %>% 
+  filter(I_norm >= 0.0001) %>% 
+  filter(str_detect(sample, "NSW"))
+
+svg("AE_ion_plot.svg", width = 32/2.54 , height = 14.8/2.54, pointsize = 12)
+
+AE_ion_plot <- ggplot(hit_NSWAE_1, aes(x = ion_name, y = sample, size = I_norm, color = method))+
+  geom_point() +
+  scale_colour_manual(values = Farb) +
+  coord_flip() + 
+  scale_x_discrete(limits = rev(levels(hit_NSWAE_1$ion_name))) +
+  scale_size_continuous(name="I (norm)", breaks = c(0.001, 0.01, 0.1, 0.25, 0.5, 0.75 ,1)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1, size = 11))
+
+AE_ion_plot
+
+dev.off()
+
+svg("NSW_ion_plot.svg", width = 32/2.54 , height = 14.8/2.54, pointsize = 12)
+
+NSW_ion_plot <- ggplot(hit_NSWAE_2, aes(x = ion_name, y = sample, size = I_norm, color = method))+
+  geom_point() +
+  scale_colour_manual(values = Farb) +
+  coord_flip() + 
+  scale_x_discrete(limits = rev(levels(hit_NSWAE_1$ion_name))) +
+  scale_size_continuous(name="I (norm)", breaks = c(0.001, 0.01, 0.1, 0.25, 0.5, 0.75 ,1)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1, size = 11))
+
+NSW_ion_plot
+
+dev.off()
+```
+
+
+## 3.3 Algal exudate derivatization 
+
+### 3.3.1 Load data
+
+```{r}
+
+#load ICBM-OCEAN data of alcohol derivatization experiments. "D" stands for derivatized samples
+
+# load AE
+
+
+AE = read.csv("ICBM_OCEAN/AE_NSW/Formula_Attribution_AE.csv", header = T, stringsAsFactors = F)
+
+
+# load AE_D
+
+AE_D = read.csv("ICBM_OCEAN/AE_NSW/Formula_Attribution_AE_D.csv", header = T, stringsAsFactors = F)
+
+
+
+```
+
+### 3.3.2 merch data frames with derivatized and non derivatized samples of each set
+
+
+```{r}
+
+#select important columns without samples and separate in 1. chemical data and 2. samples with mz
+
+AE_chem = AE %>% 
+  select(mz:alternative_formula) %>% 
+  dplyr::rename(MDL=MDL_3.3)
+
+AE_samp = AE %>% 
+  select(formula,85:114)
+
+AE_D_chem = AE_D %>% 
+  select(mz:alternative_formula)%>% 
+  dplyr::rename(MDL=MDL_3.5)
+
+AE_D_samp = AE_D %>% 
+  select(formula, 85:114)
+
+all_chem = AE_chem %>% 
+  rbind(AE_chem, AE_D_chem) %>% 
+  distinct(formula, .keep_all = TRUE) 
+
+all_AE = all_chem %>% 
+  left_join(AE_samp, by = "formula") %>% 
+  left_join(AE_D_samp, by = "formula")
+
+```
+
+### 3.3.3 Rename samples / shorten sample names
+
+```{r}
+#all_AE 
+
+samp <- all_AE %>% 
+  select(84:143)
+
+chem <- all_AE %>% 
+  select(1:83)
+
+samp1 <- colnames(samp)
+
+chem1 <- colnames(chem)
+
+samp2 <- data.frame(samp1)
+
+samp3 <- as.data.frame(str_split_fixed(samp2$samp1, "_", 9))
+
+samp4 <- samp3 %>% 
+  select(6)
+
+col1 = c(1,2,3)
+
+samp4[["V7"]] <- col1
+
+samp5 <- str_c(samp4$V6, samp4$V7, sep = "_", collapse = NULL)
+
+samp5<-gsub("\\.","_",samp5)
+
+G <- c(chem1,samp5)
+
+colnames(all_AE) <- c(G)
+
+```
+
+
+### 3.3.4 Additional structural informations
+
+Exchange slash with dot and add additional structural information (Lipids, Proteins, AminoSugars, Carbohydrates, Nucleotides, Phytochems)
+
+
+```{r}
+
+all_chem <- all_chem %>%
+  mutate(N.C = N/C) %>%
+  mutate(P.C = P/C) %>%
+  mutate(N.P = N/P)
+
+
+```
+
+
+### 3.3.5 Delete heavy isotopes
+
+C13, N15, S34 and O18 are duplicates of C12, N14, S32 and O16, respectively. Therefore, they are deleted
+
+
+```{r}
+
+all_chem_AE <- all_chem %>%
+  filter (C13==0, O18==0, N15==0, S34==0, Cl37==0)
+
+all_chem_AE$formula <- gsub('[_ ]', '', all_chem_AE$formula)
+
+all_chem_AE = all_chem_AE %>%
+  dplyr::rename(formula_1 = formula_isotopefree) %>%
+  dplyr::rename(formula_isotopefree = formula) %>%
+  dplyr::rename(formula = formula_1) %>%
+  select(1:3,5,4,6:ncol(all_chem_AE))
+
+all_AE <- all_AE %>%
+  filter (C13==0, O18==0, N15==0, S34==0, Cl37==0)
+
+all_AE$formula <- gsub('[_ ]', '', all_AE$formula)
+
+all_AE = all_AE %>%
+  dplyr::rename(formula_1 = formula_isotopefree) %>%
+  dplyr::rename(formula_isotopefree = formula) %>%
+  dplyr::rename(formula = formula_1) %>%
+  select(1:3,5,4,6:ncol(all_AE))
+
+
+```
+
+### 3.3.6 Data clean up (contaminant removal)
+
+
+```{r}
+
+# replace all NA with 0
+
+all_AE <- all_AE %>%
+  replace(is.na(.), 0)
+
+
+all_AE_BA = all_AE %>% 
+  filter( mz > 121.02938, mz < 121.02962) %>% 
+  select(formula_isotopefree, mz, 90:113,120:143)
+
+
+#remove contaminants based on S/MDL ratios from blanks
+
+NoContaminants_AE <- all_AE %>%
+  dplyr::select(formula_isotopefree, mz, MDL, present_in, 83:113) %>%
+  mutate(BlankMax = pmax(PB_B1_1, PB_B1_2,PB_B1_3, PB_B2_1, PB_B2_2, PB_B2_3)) %>%
+  mutate(S_MDLratio = BlankMax/MDL) %>%
+  filter(S_MDLratio < 1.5) %>% 
+  select(1:2,6:35) %>% 
+  select(-PB_B1_1, -PB_B1_2, -PB_B1_3, -PB_B2_1, -PB_B2_2, -PB_B2_3)
+
+
+NoContaminants_AE_D <- all_AE %>%
+  dplyr::select(formula_isotopefree, mz, MDL, present_in, 114:143) %>%
+  mutate(BlankMax = pmax(B_B1_1, B_B1_2, B_B1_3, B_B2_1, B_B2_2, B_B2_3)) %>%
+  mutate(S_MDLratio = BlankMax/MDL) %>%
+  filter(S_MDLratio < 1.5) %>% 
+  select(1:2,5:34) %>% 
+  select(-B_B1_1,-B_B1_2, -B_B1_3, -B_B2_1,- B_B2_2, -B_B2_3)
+
+#join AE_D and AE
+
+
+NoContaminants_all_AE = all_chem_AE %>% 
+  full_join(NoContaminants_AE, by = c("formula_isotopefree", "mz")) %>% 
+  full_join(NoContaminants_AE_D, by = c("formula_isotopefree", "mz")) %>% 
+  select(formula_isotopefree, mz, 87:134)
+
+NoContaminants_all_AE[NoContaminants_all_AE == 0] <- NA
+
+NoContaminants_all_AE = delete.na(NoContaminants_all_AE, 60)
+
+
+# delete common contaminants and add BA again
+
+C <- read.csv("Data/Contaminants.csv")
+
+NoContaminants_all_AE <- NoContaminants_all_AE %>% 
+  anti_join(C, by = c("formula_isotopefree" = "Formula")) %>% 
+  distinct(formula_isotopefree, .keep_all= TRUE)
+
+NoContaminants_all_AE <- NoContaminants_all_AE %>% 
+  union(all_AE_BA) 
+
+NoContaminants_all_AE = delete.na(NoContaminants_all_AE, 48)
+
+
+# Are IDeg still in the samples, I want to keep? Not in Contaminants, which I will kick out? / - Should be in all natural samples - shouldnt be in all_AEs
+
+NoContaminants_all_AE %>%
+  filter(formula_isotopefree == "C21H26O11"|formula_isotopefree =="C17H20O9"|formula_isotopefree =="C17H20O9"|formula_isotopefree =="C19H22O10"|formula_isotopefree =="C20H22O10"|formula_isotopefree =="C20H24O11"|formula_isotopefree =="C13H18O7"|formula_isotopefree =="C14H20O7"|formula_isotopefree =="C15H22O7"|formula_isotopefree =="C15H22O8"|formula_isotopefree =="C16H24O8" )
+
+# mz 313.1293 / 314.1366 u / formula	C15H22O7 (only compound found) ??? 
+
+#Have a look at the data
+
+NoCont_long <- NoContaminants_all_AE %>%
+  gather(SampleName, intensity, 3:50) %>%
+  filter(intensity!=0)%>%
+  dplyr::select(formula_isotopefree,mz,SampleName,intensity) %>%
+  mutate(SampleName=substr(SampleName,1,nchar(SampleName)-3))
+
+
+ggplot(NoCont_long)+
+  geom_jitter(mapping=aes(x=mz, y=intensity, colour= SampleName))
+
+```
+
+
+
+### 3.3.7 combining triplicate measurements
+
+Combination of triplicate measurement. Criteria: formulas that appear in all triplicate measurements
+
+```{r}
+
+#filter triplicate measurements if at least one contains a zero value & combine triplicate measurements by mean value (If it does not work: uninstall plyr package and use dplyr)
+
+all_AE_comb = NoContaminants_all_AE %>%
+  gather(rep, I, -formula_isotopefree, -mz) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(mz,formula_isotopefree, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz,formula_isotopefree, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0)
+
+#replace formula_isotopefree with mz and rename samples
+
+all_chem_AE_mz = all_chem_AE %>% 
+  select(formula_isotopefree, mz)
+
+all_AE_comb = all_AE_comb %>% 
+  rename_all(~c("mz","formula_isotopefree","AE_1","AE_2","AE_3","AE_4","AE_5","AE.D_1","AE.D_2","AE.D_3","AE.D_4","AE.D_5","AE.D_S1","AE.D_S2","AE.D_S3","AE_S1","AE_S2","AE_S3"))
+
+#combine all triplicates (Formula attribution) for mass spectra with at least 3 from 8
+
+AE_FA_spectra = all_AE_comb %>%
+  gather(rep, I, -formula_isotopefree,-mz) %>% 
+  separate(rep, into=c('sample', 'replica'), sep='_') %>%
+  dplyr::group_by(mz,formula_isotopefree, sample) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz,formula_isotopefree, sample) %>% 
+  unite(sample, sample, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(across(where(is.numeric), round, 5))
+
+AE_spectra = AE_FA_spectra %>% 
+  left_join(all_chem_AE_mz, by = c("mz","formula_isotopefree")) %>% 
+  select(mz,formula_isotopefree, 2:4) %>% 
+  drop_na() %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  filter(mz != 121.02950) %>% #with or without BA
+  filter(mz != 161.04554) %>%
+  filter(mz != 259.02817) %>%
+  filter(mz != 276.01834) %>%
+  filter(mz != 250.07206) %>%
+  filter(mz != 611.15921) %>%
+  filter(mz != 607.18797) %>%
+  filter(mz != 362.07038) %>%
+  filter(mz != 693.18425) %>%
+  filter(mz != 188.07170) %>%
+  filter(mz != 377.08550) %>%
+  filter(mz !=  665.21418) %>% 
+  filter(mz>=100&mz<=700)
+
+
+AE_FA_spectra_count = AE_spectra 
+
+AE_FA_spectra_count[AE_FA_spectra_count == 0] <- NA
+
+AE_FA_spectra_count_1 = AE_FA_spectra_count %>% 
+  summarise(AE_na_count = sum(!is.na(AE)))
+
+AE_FA_spectra_count_2 = AE_FA_spectra_count %>% 
+  summarise(AE.D_na_count = sum(!is.na(AE.D)))
+
+
+#combine all triplicates (sample junction (data from ion search)) for mass spectra with at least 3 from 8 
+
+AE_df_noCont_comb[AE_df_noCont_comb == 0] <- NA
+
+AE_SJ_spectra = AE_df_noCont_comb %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica'), sep='_') %>%
+  dplyr::group_by(mz, sample) %>%
+  dplyr::summarise(I_mean=higher_0(I,3)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(across(where(is.numeric), round, 5))
+
+AE_D_df_noCont_comb[AE_D_df_noCont_comb == 0] <- NA
+
+AE_D_SJ_spectra = AE_D_df_noCont_comb %>%
+gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica'), sep='_') %>%
+  dplyr::group_by(mz, sample) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0) %>% 
+  dplyr::rename(AE_D = AE) %>% 
+  mutate(across(where(is.numeric), round, 5))
+
+
+```
+
+### 3D plots
+
+
+```{R}
+#3D plot sample junction
+
+AE_all_SJ_spectra = AE_D_SJ_spectra %>% 
+  full_join(AE_SJ_spectra, by = "mz")
+  
+
+AE_all_SJ_spectra_3D = AE_all_SJ_spectra %>% 
+  gather(Sample, I, -mz) %>% 
+  filter(mz != 121.02950) %>%
+  filter(mz != 264.08774) %>%
+  filter(mz != 162.83909) %>%
+  filter(mz != 665.21418) %>%
+  filter(mz != 259.02818) %>%
+  filter(mz != 250.07209) %>%
+  filter(mz != 607.18797) %>%
+  filter(mz != 164.83614) %>%
+  filter(mz != 272.79504) %>%
+  filter(mz>=100&mz<=700) %>% 
+  drop_na() %>% 
+  group_by(Sample) %>% 
+  mutate(I_norm = I/max(I)) %>% 
+  select(1,2,4)
+
+
+Farbs = c("AE"="#56B4E9","AE_D"="#009E73", "Derivatization_crystn"="#F0E442","Standard"="#0072B2")
+
+Farbs <- Farbs[as.numeric(as.factor(AE_all_SJ_spectra_3D$Sample))]
+
+svg("AE_all_SJ_spectra_3D.svg", width = 20/2.54 , height = 25/2.54, pointsize = 12)
+
+AE_SJ_spectra_3D_plot <- scatterplot3d(AE_all_SJ_spectra_3D[,1:3],type = "h", pch = "", xlim = c(100, 700), zlim = c(0, 1.2), angle = -140, box = F, grid = T, color = Farbs, ylim = c(1,2) ,tick.marks = T, highlight.3d = F, y.margin.add=0.1,lab = c(1,5,5), lwd = .8)
+
+dev.off()
+
+#3D Plot formula attribution 
+
+AE_FA_spectra
+
+AE_FA_spectra_3D = AE_FA_spectra %>% 
+  select(1,3:4) %>% 
+  gather(Sample, I, -mz) %>% 
+  filter(mz != 121.02950) %>% #with or without BA
+  filter(mz != 161.04554) %>%
+  filter(mz != 259.02817) %>%
+  filter(mz != 276.01834) %>%
+  filter(mz != 250.07206) %>%
+  filter(mz != 611.15921) %>%
+  filter(mz != 607.18797) %>%
+  filter(mz != 362.07038) %>%
+  filter(mz != 693.18425) %>%
+  filter(mz != 188.07170) %>%
+  filter(mz != 377.08550) %>%
+  filter(mz !=  665.21418) %>%
+  filter(mz>=100&mz<=700) %>% 
+  drop_na() %>% 
+  group_by(Sample) %>% 
+  mutate(I_norm = I/max(I)) %>% 
+  select(1,2,4)
+
+	
+
+Farbs = c("AE"="#56B4E9","AE_D"="#009E73")
+
+Farbs <- Farbs[as.numeric(as.factor(AE_FA_spectra_3D$Sample))]
+
+svg("AE_FA_spectra_3D.svg", width = 20/2.54 , height = 25/2.54, pointsize = 12)
+
+AE_FA_spectra_3D_plot <- scatterplot3d(AE_FA_spectra_3D[,1:3],type = "h", pch = "", xlim = c(100, 700), zlim = c(0, 1.2), angle = -140, box = F, grid = T, color = Farbs, ylim = c(1,2) ,tick.marks = T, highlight.3d = F, y.margin.add=0.1,lab = c(1,5,5), lwd = 0.8)
+  
+dev.off()
+
+```
+
+## 3.3 NSW mass spectra 
+
+### 3.3.1 Load data
+
+```{r}
+
+#load ICBM-OCEAN data of alcohol derivatization experiments. "D" stands for derivatized samples
+
+# load NSW
+
+
+NSW = read.csv("ICBM_OCEAN/AE_NSW/Formula_Attribution_NSW.csv", header = T, stringsAsFactors = F)
+
+
+# load NSW_D
+
+NSW_D = read.csv("ICBM_OCEAN/AE_NSW/Formula_Attribution_NSW_D.csv", header = T, stringsAsFactors = F)
+
+
+
+```
+
+### 3.3.2 merch data frames with derivatized and non derivatized samples of each set
+
+
+```{r}
+
+#select important columns without samples and separate in 1. chemical data and 2. samples with mz
+
+
+NSW[85:99] <- lapply(NSW[85:99], as.numeric)
+
+NSW_D[85:99] <- lapply(NSW_D[85:99], as.numeric)
+
+NSW_chem = NSW %>% 
+  select(mz:alternative_formula) %>% 
+  dplyr::rename(MDL=MDL_3.5)
+
+NSW_samp = NSW %>% 
+  select(formula,85:ncol(NSW))
+
+NSW_D_chem = NSW_D %>% 
+  select(mz:alternative_formula)%>% 
+  dplyr::rename(MDL=MDL_3.5)
+
+NSW_D_samp = NSW_D %>% 
+  select(formula, 85:ncol(NSW_D))
+
+all_chem = NSW_chem %>% 
+  rbind(NSW_D_chem, NSW_D_chem) %>% 
+  distinct(formula, .keep_all = TRUE) 
+
+all_NSW = all_chem %>% 
+  left_join(NSW_samp, by = "formula") %>% 
+  left_join(NSW_D_samp, by = "formula")
+
+```
+
+### 3.3.3 Rename samples / shorten sample names
+
+```{r}
+#all_NSW 
+
+samp <- all_NSW %>% 
+  select(84:ncol(all_NSW))
+
+samp1 <- colnames(samp)
+
+chem1 <- colnames(all_chem)
+
+samp2 <- data.frame(samp1)
+
+samp3 <- as.data.frame(str_split_fixed(samp2$samp1, "_", 9))
+
+samp4 <- samp3 %>% 
+  select(6,7)
+
+col1 = c(1,2,3)
+
+samp4[["V8"]] <- col1
+
+samp5 <- str_c(samp4$V6, samp4$V7, samp4$V8, sep = "_" , collapse = NULL)
+
+samp5<-gsub("\\.","_",samp5)
+
+G <- c(chem1,samp5)
+
+colnames(all_NSW) <- c(G)
+
+```
+
+
+### 3.3.4 Additional structural informations
+
+Exchange slash with dot and add additional structural information (Lipids, Proteins, AminoSugars, Carbohydrates, Nucleotides, Phytochems)
+
+
+```{r}
+
+all_chem <- all_chem %>%
+  mutate(N.C = N/C) %>%
+  mutate(P.C = P/C) %>%
+  mutate(N.P = N/P)
+
+```
+
+
+### 3.3.5 Delete heavy isotopes
+
+C13, N15, S34 and O18 are duplicates of C12, N14, S32 and O16, respectively. Therefore, they are deleted
+
+
+```{r}
+
+
+all_chem_NSW <- all_chem %>%
+  filter (C13==0, O18==0, N15==0, S34==0, Cl37==0)
+
+all_chem_NSW$formula <- gsub('[_ ]', '', all_chem_NSW$formula)
+
+all_chem_NSW = all_chem_NSW %>%
+  dplyr::rename(formula_1 = formula_isotopefree) %>%
+  dplyr::rename(formula_isotopefree = formula) %>%
+  dplyr::rename(formula = formula_1) %>%
+  select(1:3,5,4,6:ncol(all_chem_NSW))
+
+all_NSW <- all_NSW %>%
+  filter (C13==0, O18==0, N15==0, S34==0, Cl37==0)
+
+all_NSW$formula <- gsub('[_ ]', '', all_NSW$formula)
+
+all_NSW = all_NSW %>%
+  dplyr::rename(formula_1 = formula_isotopefree) %>%
+  dplyr::rename(formula_isotopefree = formula) %>%
+  dplyr::rename(formula = formula_1) %>%
+  select(1:3,5,4,6:ncol(all_NSW))
+```
+
+### 3.3.6 Data clean up (contaminant removal)
+
+
+```{r}
+
+# replace all NA with 0
+
+all_NSW <- all_NSW %>%
+  replace(is.na(.), 0)
+
+
+all_NSW_BA = all_NSW %>% 
+  filter( mz > 121.02938, mz < 121.02962) %>% 
+  select(formula_isotopefree, mz, 87:98,102:ncol(all_NSW))
+
+
+#remove contaminants based on S/MDL ratios from blanks
+
+NoContaminants_NSW <- all_NSW %>%
+    dplyr::select(formula_isotopefree, mz, MDL, present_in, 84:98) %>%
+    mutate(BlankMax = pmax(PB_4_1, PB_4_2,PB_4_3))%>%
+    mutate(S_MDLratio = BlankMax/MDL) %>%
+    filter(S_MDLratio < 1) %>% 
+    select(1:2,8:19)
+
+
+NoContaminants_NSW_D <- all_NSW %>%
+  dplyr::select(formula_isotopefree, mz, MDL, present_in, 99:113) %>%
+  mutate(BlankMax = pmax(PB_5_1, PB_5_2,PB_5_3))%>%
+  mutate(S_MDLratio = BlankMax/MDL) %>%
+  filter(S_MDLratio < 1) %>% 
+  select(1:2,8:19)
+
+
+#join AlEx_D and Alex
+
+
+NoContaminants_all_NSW = all_chem_NSW %>% 
+  full_join(NoContaminants_NSW, by = "formula_isotopefree") %>% 
+  full_join(NoContaminants_NSW_D, by = "formula_isotopefree") %>% 
+  select(formula_isotopefree, mz, 88:112)
+
+NoContaminants_all_NSW[NoContaminants_all_NSW == 0] <- NA
+
+NoContaminants_all_NSW = delete.na(NoContaminants_all_NSW, 24)
+
+
+# delete common contaminants and add BA again
+
+C <- read.csv("Data/Contaminants.csv")
+
+NoContaminants_all_NSW <- NoContaminants_all_NSW %>% 
+  anti_join(C, by = c("formula_isotopefree" = "Formula")) %>% 
+  union(all_NSW_BA) %>% 
+  distinct(formula_isotopefree, .keep_all= TRUE)
+
+
+# Are IDeg still in the samples, I want to keep? Not in Contaminants, which I will kick out? / - Should be in all natural samples - shouldnt be in all_NSWs
+
+NoContaminants_all_NSW %>%
+  filter(formula_isotopefree == "C21H26O11"|formula_isotopefree =="C17H20O9"|formula_isotopefree =="C17H20O9"|formula_isotopefree =="C19H22O10"|formula_isotopefree =="C20H22O10"|formula_isotopefree =="C20H24O11"|formula_isotopefree =="C13H18O7"|formula_isotopefree =="C14H20O7"|formula_isotopefree =="C15H22O7"|formula_isotopefree =="C15H22O8"|formula_isotopefree =="C16H24O8" )
+
+# mz 313.1293 / 314.1366 u / formula	C15H22O7 (only compound found) ??? 
+
+#Have a look at the data
+
+NoCont_long <- NoContaminants_all_NSW %>%
+  gather(SampleName, intensity, 3:26) %>%
+  filter(intensity!=0)%>%
+  dplyr::select(formula_isotopefree,mz,SampleName,intensity) %>%
+  mutate(SampleName=substr(SampleName,1,nchar(SampleName)-3))
+
+
+ggplot(NoCont_long)+
+  geom_jitter(mapping=aes(x=mz, y=intensity, colour= SampleName))
+
+```
+
+
+
+### 3.3.7 combining triplicate measurements
+
+Combination of triplicate measurement. Criteria: formulas that appear in all triplicate measurements
+
+```{r}
+
+#filter triplicate measurements if at least one contains a zero value & combine triplicate measurements by mean value (If it does not work: uninstall plyr package and use dplyr)
+
+all_NSW_comb = NoContaminants_all_NSW %>%
+  gather(rep, I, -formula_isotopefree) %>% 
+  separate(rep, into=c('sample', 'replica','measurement'), sep='_') %>%
+  dplyr::group_by(formula_isotopefree, sample, replica) %>%
+  dplyr::summarise(I_mean=higher_0(I,3)) %>% 
+  ungroup(formula_isotopefree, sample) %>% 
+  unite(sample, sample, replica, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0)
+
+#replace formula_isotopefree with mz and rename samples
+
+all_chem_NSW_mz = all_chem_NSW %>% 
+  select(formula_isotopefree, mz)
+
+all_NSW_comb = all_NSW_comb %>% 
+  select(formula_isotopefree, 2:3,6:7,4:5,8:9) %>% 
+  rename_all(~c("formula_isotopefree","NSW.D_pH8_1","NSW.D_pH8_2","NSW.D_pH2_1" ,"NSW.D_pH2_2" ,"NSW_pH8_1","NSW_pH8_2","NSW_pH2_1","NSW_pH2_2"))
+
+#combine all triplicates (Formula attribution) for mass spectra with at least 2 from 4
+
+NSW_FA_spectra = all_NSW_comb %>%
+  gather(rep, I, -formula_isotopefree) %>% 
+  separate(rep, into=c("sample","replica"), sep='_') %>%
+  dplyr::group_by(formula_isotopefree, sample) %>%
+  dplyr::summarise(I_mean=higher_0(I,2)) %>% 
+  ungroup(formula_isotopefree, sample) %>% 
+  unite(sample, sample, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(across(where(is.numeric), round, 5))
+
+NSW_spectra = NSW_FA_spectra %>% 
+  left_join(all_chem_NSW_mz, by = "formula_isotopefree") %>% 
+  select(mz,formula_isotopefree, 2:3) %>% 
+  drop_na() %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  filter(mz != 121.02950) %>% 
+  filter(mz != 206.08228) %>%
+  filter(mz != 192.06663) %>%
+  filter(mz != 234.11356) %>%
+  filter(mz != 162.09244) %>%
+  filter(mz != 178.05097) %>%
+  filter(mz != 323.11361) %>%
+  filter(mz != 466.10882) %>%
+  filter(mz>=100&mz<=700)
+  
+NSW_FA_spectra_count = NSW_spectra
+
+NSW_FA_spectra_count[NSW_FA_spectra_count == 0] <- NA
+
+NSW_FA_spectra_count_1 = NSW_FA_spectra_count %>% 
+  summarise(NSW_na_count = sum(!is.na(NSW)))
+
+NSW_FA_spectra_count_2 = NSW_FA_spectra_count %>% 
+  summarise(NSW.D_na_count = sum(!is.na(NSW.D)))
+
+
+#combine all triplicates (sample junction (data from ion search)) for mass spectra with at least 2 from 4 
+
+NSW_df_noCont_comb[NSW_df_noCont_comb == 0] <- NA
+
+NSW_df_noCont_comb = NSW_df_noCont_comb %>% 
+    rename_all(~c("mz","NSW_pH8_1","NSW_pH8_2","NSW_pH2_1","NSW_pH2_2"))
+
+NSW_SJ_spectra = NSW_df_noCont_comb %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica'), sep='_') %>%
+  dplyr::group_by(mz, sample) %>%
+  dplyr::summarise(I_mean=higher_0(I,3)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(across(where(is.numeric), round, 5))
+
+NSW_D_df_noCont_comb[NSW_D_df_noCont_comb == 0] <- NA
+
+NSW_D_df_noCont_comb = NSW_D_df_noCont_comb %>% 
+    rename_all(~c("mz","NSW.D_pH8_1","NSW.D_pH8_2","NSW.D_pH2_1" ,"NSW.D_pH2_2"))
+
+NSW_D_SJ_spectra = NSW_D_df_noCont_comb %>%
+  gather(rep, I, -mz) %>% 
+  separate(rep, into=c('sample', 'replica'), sep='_') %>%
+  dplyr::group_by(mz, sample) %>%
+  dplyr::summarise(I_mean=higher_0(I,3)) %>% 
+  ungroup(mz, sample) %>% 
+  unite(sample, sample, remove = T) %>% 
+  na.omit() %>% 
+  spread(sample,I_mean) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(across(where(is.numeric), round, 5))
+
+
+
+
+```
+
+### 3.3.8 3D plots
+
+
+```{R}
+#3D plot sample junction
+
+NSW_all_SJ_spectra = NSW_D_SJ_spectra %>% 
+  full_join(NSW_SJ_spectra, by = "mz")
+  
+
+NSW_all_SJ_spectra_3D = NSW_all_SJ_spectra %>% 
+  gather(Sample, I, -mz) %>% 
+  filter(mz != 121.02950) %>%
+  filter(mz != 322.12959) %>%
+  filter(mz != 206.08228) %>%
+  filter(mz != 228.03361) %>%
+  filter(mz != 264.08775) %>%
+  filter(mz != 464.11181) %>%
+  filter(mz != 323.13299) %>%
+  filter(mz != 192.06663) %>%
+  filter(mz != 550.17181) %>%
+  filter(mz != 249.08807) %>%
+  filter(mz != 162.09244) %>%
+  filter(mz != 146.08226) %>%
+  filter(mz != 276.06200) %>%
+  filter(mz != 219.10677) %>%
+  filter(mz>=100&mz<=700) %>% 
+  drop_na() %>% 
+  group_by(Sample) %>% 
+  mutate(I_norm = I/max(I)) %>% 
+  select(1,2,4)
+
+
+Farbs = c("NSW"="#56B4E9","NSW_D"="#009E73")
+
+Farbs <- Farbs[as.numeric(as.factor(NSW_all_SJ_spectra_3D$Sample))]
+
+svg("NSW_all_SJ_spectra_3D.svg", width = 20/2.54 , height = 25/2.54, pointsize = 12)
+
+NSW_SJ_spectra_3D_plot <- scatterplot3d(NSW_all_SJ_spectra_3D[,1:3],type = "h", pch = "", xlim = c(100, 700), zlim = c(0, 1.2), angle = -140, box = F, grid = T, color = Farbs, ylim = c(1,2) ,tick.marks = T, highlight.3d = F, y.margin.add=0.1,lab = c(1,5,5), lwd = .8)
+
+dev.off()
+
+#3D Plot formula attribution 
+
+NSW_FA_spectra
+
+NSW_FA_spectra_3D = NSW_spectra %>% 
+  select(-formula_isotopefree) %>% 
+  gather(Sample, I, -mz) %>% 
+  filter(mz != 121.02950) %>% #with or without BA
+  filter(mz != 206.08228) %>%
+  filter(mz != 192.06663) %>%
+  filter(mz != 234.11356) %>%
+  filter(mz != 162.09244) %>%
+  filter(mz != 178.05097) %>%
+  filter(mz != 323.11361) %>%
+  filter(mz != 466.10882) %>%
+  filter(mz>=100&mz<=700) %>% 
+  drop_na() %>% 
+  group_by(Sample) %>% 
+  mutate(I_norm = I/max(I)) %>% 
+  select(1,2,4)
+
+	
+
+Farbs = c("NSW"="#56B4E9","NSW_D"="#009E73")
+
+Farbs <- Farbs[as.numeric(as.factor(NSW_FA_spectra_3D$Sample))]
+
+svg("NSW_FA_spectra_3D.svg", width = 20/2.54 , height = 25/2.54, pointsize = 12)
+
+NSW_FA_spectra_3D_plot <- scatterplot3d(NSW_FA_spectra_3D[,1:3],type = "h", pch = "", xlim = c(100, 700), zlim = c(0, 1.2), angle = -140, box = F, grid = T, color = Farbs, ylim = c(1,2) ,tick.marks = T, highlight.3d = F, y.margin.add=0.1,lab = c(1,5,5), lwd = 0.8)
+  
+dev.off()
+
+```
+
+## 5.1 PCoA NSW / AE / NELHA / IHSS 
+
+### 3.6 All samples PCoA
+
+### 3.6.1 get data
+
+```{r}
+
+# replace all NA with 0
+
+all_NSW_clean_samp = all_NSW_clean %>% 
+  select(1:9)
+
+all_NSW_clean_chem = all_NSW_clean %>% 
+  select(1,10:ncol(all_NSW_clean))
+
+all_AE_clean_samp = all_AE_clean %>% 
+  select(1:17)
+
+all_AE_clean_chem = all_AE_clean %>% 
+  select(1,18:86)
+
+all_NELHA_clean_samp = NELHA_clean %>% 
+  select(1:7)
+
+all_NELHA_clean_chem = NELHA_clean %>% 
+  select(1,8:86) %>% 
+  dplyr::rename(MDL = MDL_3.3)
+
+#put AE and NSW data frames into list
+
+samp_list = list(all_NSW_clean_samp, all_AE_clean_samp, all_NELHA_clean_samp)
+
+
+#merge all data frames together
+
+all_clean_samp = samp_list %>% 
+  reduce(full_join, by='formula_isotopefree')
+
+all_clean_samp[all_clean_samp == 0 ] <- NA
+
+all_clean_chem = bind_rows(all_NSW_clean_chem, all_AE_clean_chem, all_NELHA_clean_chem) %>% 
+  distinct(formula_isotopefree, .keep_all = TRUE) 
+
+all_clean = all_clean_chem %>% 
+  left_join(all_clean_samp, by = "formula_isotopefree")
+
+```
+### 3.6.3 Normalization 
+
+```{r}
+all_clean_samp
+  
+all_abund_matrix <- all_clean_samp %>%
+  replace(is.na(.), 0) %>% 
+  column_to_rownames(var = "formula_isotopefree")
+
+all_abund_matrix <- t(all_abund_matrix)
+
+all_abund_matrix <- as.data.frame(all_abund_matrix)
+
+all_abund_matrix <- as.matrix(all_abund_matrix)
+
+```
+
+
+Take the relative abundance of intensities along sites
+
+```{r}
+
+all_norm <- decostand(all_abund_matrix, method = "total") # is doing the same as make_relativ (funrar package)
+
+rowSums(all_norm) # should be one everywhere
+
+```
+
+### 3.6.4 mean_mat 
+
+(mean.mat calculations follow a script of Helena Osterholz and Tabea Hildebrandt. PCoA calculations and visualization were done with the help of Andi Eich)
+
+With an old script of Helena Osterholz, I can combine the samples and their intensities with the chemical data --> mean mat
+
+Prepare data for combining it --> z.b. PCoA
+
+```{r}
+# make relative abundance table joinable
+all_norm <- as.data.frame(all_norm) %>%
+   rownames_to_column(var = "SampleName")
+
+
+# only take "community" data
+all_comm <- all_norm %>%
+  dplyr::select(2:ncol(all_norm))
+
+# only take "method" data
+all_env <- all_norm %>%
+  dplyr::select(1) %>% 
+  add_column(Method = c("D-SPE-DOM","D-SPE-DOM","SPE-DOM","SPE-DOM","D-SPE-DOM","D-SPE-DOM","SPE-DOM","SPE-DOM","SPE-DOM","SPE-DOM","SPE-DOM","SPE-DOM","SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","SPE-DOM","SPE-DOM","SPE-DOM", "Standard","Standard", "Standard", "Standard", "Standard", "Standard"))  
+                      
+
+(all_norm$SampleName)
+
+```
+
+
+```{r}
+
+#get mean.mat data.frame
+
+all_domt <- all_norm %>%
+  column_to_rownames(var = "SampleName")
+
+all_dom <- as.data.frame(t(all_domt))
+
+tall_norm <- all_dom %>%
+  rownames_to_column("formula_isotopefree")
+
+
+# Nimm nur die Massen, die auch in all_norm bzw. final sind:
+
+all_Chem <- tall_norm %>%
+  left_join(all_clean_chem, by = "formula_isotopefree")%>% 
+  dplyr::select(1, 32:116) %>% 
+  filter(!duplicated(formula_isotopefree))
+
+```
+
+```{r}
+#calculate averages from chem.
+#rows are chem variables, columns are sample number
+#mean mat - gewichtete mittelwerte unter einbeziehung der peakintensität für jede probe
+
+
+
+all_Chem <- all_Chem %>%
+  column_to_rownames(var = "formula_isotopefree") %>% 
+  mutate_all(function(x) as.numeric(as.character(x)))
+
+all.mean_mat <- matrix(NA,nrow = dim(all_Chem)[2],ncol = dim(all_dom)[2])
+
+
+for (j in 1:dim(all_Chem)[2]) {
+  for(k in 1:dim(all_dom)[2]) {
+        all.mean_mat[j,k] <- sum(all_Chem[,j]*all_dom[,k])
+  }
+}
+
+
+all_mean_mat <- as.data.frame(all.mean_mat)
+colnames(all_mean_mat) <- colnames(all_dom)
+row.names(all_mean_mat) <- colnames(all_Chem)
+all_mean_mat <- t(all_mean_mat)/(colSums(all_dom))
+all_mean_mat <- as.data.frame((all_mean_mat))
+count.peaks <- apply(all_dom, 2, function(c)sum(c!=0))
+all_mean_mat <- as.data.frame(cbind(all_mean_mat, count.peaks))
+all_mean_mat$C.N <- all_mean_mat$C/all_mean_mat$N
+all_mean_mat$C.P <- all_mean_mat$C/all_mean_mat$P
+all_mean_mat$C.S <- all_mean_mat$C/all_mean_mat$S
+
+#include counts
+all_Chem.pa <- all_Chem; all_Chem.pa[all_Chem.pa >0] <- 1
+all_domt.pa <- all_domt; all_domt.pa[all_domt.pa >0] <- 1
+all_dom.pa <- as.data.frame(t(all_domt.pa))
+all.mean_mat.pa <- matrix(NA,nrow = dim(all_Chem)[2],ncol = dim(all_dom)[2])
+for (j in 1:dim(all_Chem)[2]) {
+  for(k in 1:dim(all_dom)[2]) {
+    all.mean_mat.pa[j,k] <- sum(all_Chem.pa[,j]*all_dom.pa[,k])
+  }
+}
+all_mean_mat.pa <- as.data.frame(all.mean_mat.pa)
+colnames(all_mean_mat.pa) <- colnames(all_dom)
+row.names(all_mean_mat.pa) <- colnames(all_Chem)
+all_mean_mat.pa <- as.data.frame(t(all_mean_mat.pa))
+all_mean_mat$S.count <- all_mean_mat.pa$S
+all_mean_mat$N.count <- all_mean_mat.pa$N
+all_mean_mat$P.count <- all_mean_mat.pa$P
+
+all_mean_mat = all_mean_mat %>% 
+  replace(is.na(.), 0)
+  
+all_mean_mat <- remove_zero_cols(all_mean_mat)
+
+```
+
+### 3.6.5 PCoA
+
+
+```{r}
+
+# Add methods to mean_mat
+
+envdata <-all_mean_mat %>%
+  rownames_to_column(var = "SampleName")%>%
+  left_join(all_env, by = "SampleName") %>%
+  column_to_rownames(var = "SampleName") %>%
+  dplyr::rename(mol.mass = reference)
+
+# selct important coulmns for PCoA
+
+envdata_select <- envdata %>%
+  dplyr::select(mol.mass, H.C, O.C, AI, AI.mod, DBE, Aromatic, Aromatic.O_rich, Aromatic.O_poor, Highly.unsaturated, Highly.unsaturated.O_rich, Highly.unsaturated.O_poor, Unsaturated, Unsaturated.O_rich, Unsaturated.O_poor, Unsaturated.with.N, Saturated, Saturated.O_rich, Saturated.O_poor, C.N, C.P, C.S, Method)
+
+#no Saturated and Amino sugars in data 
+
+#create vectors vor PCoA
+
+all.comm <-all_norm %>% 
+  column_to_rownames("SampleName")
+
+all.comm <- t(all.comm)
+
+all_dom.dist <- vegdist(t(all.comm), method="bray") 
+
+all_dom.pcoa <- cmdscale(all_dom.dist, k=4, eig=T)
+
+scree <- cumsum(all_dom.pcoa$eig)/sum(all_dom.pcoa$eig);plot(scree);head(scree)
+
+envfit2 <- envdata_select %>%
+  dplyr::select(mol.mass, H.C, O.C, AI, AI.mod, DBE, Aromatic, Aromatic.O_rich, Aromatic.O_poor, Highly.unsaturated, Highly.unsaturated.O_rich, Highly.unsaturated.O_poor, Unsaturated, Unsaturated.O_rich, Unsaturated.O_poor, Unsaturated.with.N, Saturated, Saturated.O_rich, Saturated.O_poor, C.N, C.P, C.S, Method) %>% 
+  mutate_all(function(x) ifelse(is.infinite(x), 0, x))  
+
+                                       
+
+all.envfit2 <- envfit(all_dom.pcoa, envfit2, permutations=999, choices=c(1,2), na.rm=F)
+
+#PCoA
+
+pcoadat<-data.frame(all_dom.pcoa$points)
+
+pcoadat$sample<-row.names(pcoadat)
+
+pcoadat = pcoadat %>% 
+  add_column(group = c("D-SPE-DOM","D-SPE-DOM","SPE-DOM","SPE-DOM","D-SPE-DOM","D-SPE-DOM","SPE-DOM","SPE-DOM","SPE-DOM","SPE-DOM","SPE-DOM","SPE-DOM","SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","D-SPE-DOM","SPE-DOM","SPE-DOM","SPE-DOM", "Standard","Standard", "Standard", "Standard", "Standard", "Standard")) %>% 
+  add_column(Method =all_env$Method)
+
+names(pcoadat)
+
+all.envfit2$vectors
+
+arrows<-all.envfit2$vectors$arrows %>% data.frame() 
+
+arrows$p.val<-all.envfit2$vectors$pvals
+
+arrows$type<-row.names(arrows)
+
+scale<-2
+
+arrows_1<-mutate(arrows,Dim1=Dim1/scale,Dim2=Dim2/scale)
+
+svg("PCoA_AE_NSW.svg", width = 9, height = 6, pointsize = 12)
+
+PCoA_AE_NSW <- ggplot(data=pcoadat,aes(x=X1,y=X2))+
+  geom_point(size=3,aes(col=sample, shape = group)) +
+  geom_segment(data=filter(arrows_1,p.val < 0.0015),aes(x=0,xend=Dim1,y=0,yend=Dim2), arrow = arrow(length = unit(0.025, "npc")),colour="grey") +
+    geom_text(data=filter(arrows_1,p.val<0.0015),aes(x=Dim1,y=Dim2,label=type),size=3,vjust=2)+
+  guides(col=guide_legend('Samples'))+
+  labs(y='PCo2 (32.1%)',x='PCo1 (40.6%)')+
+  #coord_fixed(xlim = c(-0.6,0.6),ylim=c(-0.6,0.6))+
+  theme_bw()
+
+PCoA_AE_NSW
+
+
+dev.off()
+
+svg("PCoA_NSW_zoom.svg", width = 9, height = 6, pointsize = 12)
+
+PCoA_NSW <- ggplot(data=pcoadat,aes(x=X1,y=X2))+
+  geom_point(size=3,aes(col=sample, shape = group)) +
+  geom_segment(data=filter(arrows_1,p.val < 0.0015),aes(x=0,xend=Dim1,y=0,yend=Dim2), arrow = arrow(length = unit(0.025, "npc")),colour="grey") +
+    geom_text(data=filter(arrows_1,p.val<0.0015),aes(x=Dim1,y=Dim2,label=type),size=3,vjust=2)+
+  guides(col=guide_legend('Samples'))+
+  labs(y='PCo2 (40.6%)',x='PCo1 (32.1%)')+
+  coord_fixed(xlim = c(-0.5,-0.2),ylim=c(-0.2,0.0))+
+  theme_minimal()
+
+PCoA_NSW
+
+dev.off()
+
+```
+
+
+## 3.7 Differential spectra 
+
+### 3.7.1 AE and NSW
+
+```{r}
+
+#get data / change of how many replicates mean should be calculated 
+
+
+AE_diff_df1 = AE_spectra
+
+
+all_chem_AE_diff = all_chem_AE %>% 
+  mutate(across(where(is.numeric), round, 5)) 
+
+
+NSW_diff_df1 = NSW_spectra
+
+all_chem_NSW_diff = all_chem_NSW%>% 
+  mutate(across(where(is.numeric), round, 5))
+
+
+
+# modify sum formula and mz (formaly add BA 104.026215 / C7H4O)
+
+AE_derivat_chem = all_chem_AE_diff %>% 
+  mutate(across(where(is.integer), as.numeric)) %>% 
+  select(1,4:5, 11:16) %>%
+   mutate(mz_plus_D = ifelse((O != 0 & H != 0 | N != 0 & H != 0), mz + 104.02622, NA)) %>% 
+  mutate(mz_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N >= 1 & C >= 8 & H >= 5 & O >=1), mz - 104.02622, NA)) %>% 
+  mutate(C_plus_D = ifelse((O != 0 | N != 0), C+7, NA)) %>% 
+  mutate(H_plus_D = ifelse((O != 0 | N != 0), H+4, NA)) %>% 
+  mutate(O_plus_D = ifelse((O != 0 | N != 0), O+1, NA)) %>% 
+  mutate(C_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), C-7, NA)) %>% 
+  mutate(H_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), H-4, NA)) %>% 
+  mutate(O_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), O-1, NA)) %>% 
+  mutate(N_D = ifelse((N != 0 & C >= 1) , N, 0)) %>% 
+  mutate(P_D = ifelse((P != 0 & C >= 1) , P, 0)) %>%
+  mutate(S_D = ifelse((S != 0 & C >= 1) , S, 0)) %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  mutate(AI_mod_minus = (1+C_minus_D-0.5*O_minus_D-S_D-0.5*(H_minus_D+N_D+P_D))/(C_minus_D-0.5*O_minus_D-S_D-N_D-P_D)) %>%
+  mutate(AI_mod_plus = (1+C_plus_D-0.5*O_plus_D-S_D-0.5*(H_plus_D+N_D+P_D))/(C_plus_D-0.5*O_plus_D-S_D-N_D-P_D)) %>%
+  mutate(H.C_minus = H_minus_D/C_minus_D) %>%
+  mutate(O.C_minus = O_minus_D/C_minus_D) %>%
+  mutate(H.C_plus = H_plus_D/C_plus_D) %>%
+  mutate(O.C_plus = O_plus_D/C_plus_D) %>% 
+  mutate(AI_mod_minus = ifelse(AI_mod_minus <= 0, 0, AI_mod_minus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "-Inf", 0, AI_mod_minus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "Inf", 0, AI_mod_minus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus <= 0, 0, AI_mod_plus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "-Inf", 0, AI_mod_plus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "Inf", 0, AI_mod_plus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "NaN", 0, AI_mod_minus)) %>%
+  mutate(H.C_minus = ifelse(H.C_minus == "NaN", 0, H.C_minus)) %>%
+  mutate(O.C_minus = ifelse(O.C_minus == "NaN", 0, O.C_minus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "NaN", 0, AI_mod_plus)) %>%
+  mutate(H.C_plus = ifelse(H.C_plus == "NaN", 0, H.C_plus)) %>%
+  mutate(O.C_plus = ifelse(O.C_plus == "NaN", 0, O.C_plus)) %>%
+  mutate(DBE_minus = 1+0.5*(2*C_minus_D-H_minus_D+N_D+P_D)) %>%
+  mutate(DBE_plus = 1+0.5*(2*C_plus_D-H_plus_D+N_D+P_D)) %>%  
+  mutate(mz_plus_D = ifelse(between(AI_mod_plus, 0.01, 3) & between(H.C_plus, 0.25, 3) & O.C_plus < 2 | DBE_plus == 0, mz_plus_D, NA)) %>% 
+  mutate(mz_minus_D = ifelse(between(AI_mod_minus, 0.01, 3) & between(H.C_minus, 0.25, 3) & O.C_minus < 2 | DBE_minus == 0 , mz_minus_D, NA)) %>% 
+  mutate(mz_plus_D = ifelse(N_D > C_plus_D | S_D > C_plus_D | P_D > C_plus_D , NA , mz_plus_D)) %>% 
+  mutate(mz_minus_D = ifelse(N_D > C_minus_D | S_D > C_minus_D | P_D > C_minus_D , NA , mz_minus_D)) %>% 
+  mutate(C_plus_D = ifelse(is.na(mz_plus_D), NA, C_plus_D)) %>% 
+  mutate(H_plus_D = ifelse(is.na(mz_plus_D), NA, H_plus_D)) %>% 
+  mutate(O_plus_D = ifelse(is.na(mz_plus_D), NA, O_plus_D)) %>% 
+  mutate(C_minus_D = ifelse(is.na(mz_minus_D), NA, C_minus_D)) %>% 
+  mutate(H_minus_D = ifelse(is.na(mz_minus_D), NA, H_minus_D)) %>%  
+  mutate(O_minus_D = ifelse(is.na(mz_minus_D), NA, O_minus_D)) %>% 
+  mutate(N_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, N_D)) %>%  
+  mutate(P_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, P_D)) %>% 
+  mutate(S_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, S_D))%>% 
+  mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N+P))/(C-0.5*O-S-N-P)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N+P)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+  mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, AI_mod)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0)) %>% 
+  mutate(undefined = ifelse(Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined)%>% 
+  select(-AI_mod,-H.C,-O.C,-Aromatic,-Highly_unsaturated,-Unsaturated,-Saturated,-undefined) %>% 
+  select(1:20) %>% 
+  mutate(across(where(is.numeric), ~na_if(., 0)))
+  
+  
+NSW_derivat_chem = all_chem_NSW_diff %>% 
+  mutate(across(where(is.integer), as.numeric)) %>% 
+  select(1,4:5, 11:16) %>%
+   mutate(mz_plus_D = ifelse((O != 0 & H != 0 | N != 0 & H != 0), mz + 104.02622, NA)) %>% 
+  mutate(mz_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N >= 1 & C >= 8 & H >= 5 & O >=1), mz - 104.02622, NA)) %>% 
+  mutate(C_plus_D = ifelse((O != 0 | N != 0), C+7, NA)) %>% 
+  mutate(H_plus_D = ifelse((O != 0 | N != 0), H+4, NA)) %>% 
+  mutate(O_plus_D = ifelse((O != 0 | N != 0), O+1, NA)) %>% 
+  mutate(C_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), C-7, NA)) %>% 
+  mutate(H_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), H-4, NA)) %>% 
+  mutate(O_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), O-1, NA)) %>% 
+  mutate(N_D = ifelse((N != 0 & C >= 1) , N, 0)) %>% 
+  mutate(P_D = ifelse((P != 0 & C >= 1) , P, 0)) %>%
+  mutate(S_D = ifelse((S != 0 & C >= 1) , S, 0)) %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  mutate(AI_mod_minus = (1+C_minus_D-0.5*O_minus_D-S_D-0.5*(H_minus_D+N_D+P_D))/(C_minus_D-0.5*O_minus_D-S_D-N_D-P_D)) %>%
+  mutate(AI_mod_plus = (1+C_plus_D-0.5*O_plus_D-S_D-0.5*(H_plus_D+N_D+P_D))/(C_plus_D-0.5*O_plus_D-S_D-N_D-P_D)) %>%
+  mutate(H.C_minus = H_minus_D/C_minus_D) %>%
+  mutate(O.C_minus = O_minus_D/C_minus_D) %>%
+  mutate(H.C_plus = H_plus_D/C_plus_D) %>%
+  mutate(O.C_plus = O_plus_D/C_plus_D) %>% 
+  mutate(AI_mod_minus = ifelse(AI_mod_minus <= 0, 0, AI_mod_minus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "-Inf", 0, AI_mod_minus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "Inf", 0, AI_mod_minus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus <= 0, 0, AI_mod_plus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "-Inf", 0, AI_mod_plus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "Inf", 0, AI_mod_plus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "NaN", 0, AI_mod_minus)) %>%
+  mutate(H.C_minus = ifelse(H.C_minus == "NaN", 0, H.C_minus)) %>%
+  mutate(O.C_minus = ifelse(O.C_minus == "NaN", 0, O.C_minus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "NaN", 0, AI_mod_plus)) %>%
+  mutate(H.C_plus = ifelse(H.C_plus == "NaN", 0, H.C_plus)) %>%
+  mutate(O.C_plus = ifelse(O.C_plus == "NaN", 0, O.C_plus)) %>%
+  mutate(DBE_minus = 1+0.5*(2*C_minus_D-H_minus_D+N_D+P_D)) %>%
+  mutate(DBE_plus = 1+0.5*(2*C_plus_D-H_plus_D+N_D+P_D)) %>%  
+  mutate(mz_plus_D = ifelse(between(AI_mod_plus, 0.01, 3) & between(H.C_plus, 0.25, 3) & O.C_plus < 2 | DBE_plus == 0, mz_plus_D, NA)) %>% 
+  mutate(mz_minus_D = ifelse(between(AI_mod_minus, 0.01, 3) & between(H.C_minus, 0.25, 3) & O.C_minus < 2 | DBE_minus == 0 , mz_minus_D, NA)) %>% 
+  mutate(mz_plus_D = ifelse(N_D > C_plus_D | S_D > C_plus_D | P_D > C_plus_D , NA , mz_plus_D)) %>% 
+  mutate(mz_minus_D = ifelse(N_D > C_minus_D | S_D > C_minus_D | P_D > C_minus_D , NA , mz_minus_D)) %>% 
+  mutate(C_plus_D = ifelse(is.na(mz_plus_D), NA, C_plus_D)) %>% 
+  mutate(H_plus_D = ifelse(is.na(mz_plus_D), NA, H_plus_D)) %>% 
+  mutate(O_plus_D = ifelse(is.na(mz_plus_D), NA, O_plus_D)) %>% 
+  mutate(C_minus_D = ifelse(is.na(mz_minus_D), NA, C_minus_D)) %>% 
+  mutate(H_minus_D = ifelse(is.na(mz_minus_D), NA, H_minus_D)) %>%  
+  mutate(O_minus_D = ifelse(is.na(mz_minus_D), NA, O_minus_D)) %>% 
+  mutate(N_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, N_D)) %>%  
+  mutate(P_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, P_D)) %>% 
+  mutate(S_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, S_D))%>% 
+    mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N+P))/(C-0.5*O-S-N-P)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N+P)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, AI_mod)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0)) %>% 
+  mutate(undefined = ifelse(Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined)%>% 
+  select(-AI_mod,-H.C,-O.C,-Aromatic,-Highly_unsaturated,-Unsaturated,-Saturated,-undefined) %>% 
+  select(1:20) %>% 
+  mutate(across(where(is.numeric), ~na_if(., 0)))
+
+# add character to column (AE)
+
+AE_derivat_chem$C_plus_D <- sub("^", "C", AE_derivat_chem$C_plus_D)
+AE_derivat_chem$C_minus_D <- sub("^", "C", AE_derivat_chem$C_minus_D)
+AE_derivat_chem$H_plus_D <- sub("^", "H", AE_derivat_chem$H_plus_D)
+AE_derivat_chem$H_minus_D <- sub("^", "H", AE_derivat_chem$H_minus_D)
+AE_derivat_chem$O_plus_D <- sub("^", "O", AE_derivat_chem$O_plus_D)
+AE_derivat_chem$O_minus_D <- sub("^", "O", AE_derivat_chem$O_minus_D)
+AE_derivat_chem$N_D <- sub("^", "N", AE_derivat_chem$N_D)
+AE_derivat_chem$P_D <- sub("^", "P", AE_derivat_chem$P_D)
+AE_derivat_chem$S_D <- sub("^", "S", AE_derivat_chem$S_D)
+
+# add character to column (NSW)
+
+NSW_derivat_chem$C_plus_D <- sub("^", "C", NSW_derivat_chem$C_plus_D)
+NSW_derivat_chem$C_minus_D <- sub("^", "C", NSW_derivat_chem$C_minus_D)
+NSW_derivat_chem$H_plus_D <- sub("^", "H", NSW_derivat_chem$H_plus_D)
+NSW_derivat_chem$H_minus_D <- sub("^", "H", NSW_derivat_chem$H_minus_D)
+NSW_derivat_chem$O_plus_D <- sub("^", "O", NSW_derivat_chem$O_plus_D)
+NSW_derivat_chem$O_minus_D <- sub("^", "O", NSW_derivat_chem$O_minus_D)
+NSW_derivat_chem$N_D <- sub("^", "N", NSW_derivat_chem$N_D)
+NSW_derivat_chem$P_D <- sub("^", "P", NSW_derivat_chem$P_D)
+NSW_derivat_chem$S_D <- sub("^", "S", NSW_derivat_chem$S_D)
+
+#combine to new formula_column (AE)
+  
+AE_derivat_chem_1 = AE_derivat_chem %>% 
+  unite("formula_isotopefree_plus_D", C_plus_D,H_plus_D,O_plus_D,N_D,P_D,S_D, remove = FALSE, sep = "") %>% 
+   unite("formula_isotopefree_minus_D", C_minus_D,H_minus_D,O_minus_D,N_D,P_D,S_D, remove = FALSE, sep = "")
+
+AE_derivat_chem_1$formula_isotopefree_plus_D<-gsub("NA","",as.character(AE_derivat_chem_1$formula_isotopefree_plus_D))
+
+AE_derivat_chem_1$formula_isotopefree_minus_D<-gsub("NA","",as.character(AE_derivat_chem_1$formula_isotopefree_minus_D))
+
+AE_derivat_chem_2 = AE_derivat_chem_1 %>% 
+  mutate(formula_isotopefree_plus_D = ifelse(mz_plus_D >= 1000, NA, formula_isotopefree_plus_D)) %>% 
+  mutate(formula_isotopefree_minus_D = ifelse(mz_minus_D <= 30, NA, formula_isotopefree_minus_D)) %>% 
+  select(1,3,10:12,16)
+
+AE_derivat_chem_2 = delete.na(AE_derivat_chem_2, 3)
+
+
+#combine to new formula_column (NSW)
+  
+NSW_derivat_chem_1 = NSW_derivat_chem %>% 
+  unite("formula_isotopefree_plus_D", C_plus_D,H_plus_D,O_plus_D,N_D,P_D,S_D, remove = FALSE, sep = "") %>% 
+   unite("formula_isotopefree_minus_D", C_minus_D,H_minus_D,O_minus_D,N_D,P_D,S_D, remove = FALSE, sep = "")
+
+NSW_derivat_chem_1$formula_isotopefree_plus_D<-gsub("NA","",as.character(NSW_derivat_chem_1$formula_isotopefree_plus_D))
+
+NSW_derivat_chem_1$formula_isotopefree_minus_D<-gsub("NA","",as.character(NSW_derivat_chem_1$formula_isotopefree_minus_D))
+
+NSW_derivat_chem_2 = NSW_derivat_chem_1 %>% 
+  mutate(formula_isotopefree_plus_D = ifelse(mz_plus_D >= 1000, NA, formula_isotopefree_plus_D)) %>% 
+  mutate(formula_isotopefree_minus_D = ifelse(mz_minus_D <= 50, NA, formula_isotopefree_minus_D)) %>% 
+  select(1,3,10:12,16)
+
+NSW_derivat_chem_2 = delete.na(NSW_derivat_chem_2, 3)
+
+#combine with samp data (AE)
+
+AE_diff_plot = AE_diff_df1 %>% 
+  left_join(AE_derivat_chem_2, by = c("formula_isotopefree", "mz"))
+
+AE_diff_plot_1 = AE_diff_plot %>% 
+  select(1,2,3,4) %>% 
+  replace(is.na(.), 0) %>% 
+  group_by(formula_isotopefree) %>% 
+  mutate(Diff_AE = AE - AE.D) %>% 
+    dplyr::mutate(X = case_when(AE.D != 0 & AE != 0 ~ "Yes", 
+                               AE.D != 0 & AE == 0 ~ "AE.D",
+                               AE.D == 0 & AE!= 0 ~ "AE"))
+
+
+AE_diff_plot_comp = AE_diff_plot %>% 
+  select(1,3,4) %>% 
+  replace(is.na(.), 0) %>% 
+  dplyr::mutate(X = case_when(AE.D != 0 & AE != 0 ~ "Yes", 
+                               AE.D != 0 & AE == 0 ~ "AE.D",
+                               AE.D == 0 & AE!= 0 ~ "AE")) %>% 
+  mutate(AE.D = -AE.D) %>% 
+  gather(sample, I, -mz,-X) %>% 
+  filter(I != 0) %>% 
+  select(1,2,4)
+  
+
+#possible to derivatize
+
+AE_diff_plot_2 = AE_diff_plot %>%
+  select(1,2,3,4,5) %>%
+  replace(is.na(.), 0) %>%
+  filter(mz_plus_D != 0) %>% 
+  filter(AE!=0) %>% 
+  select(1,2,3)
+
+#possible derivatized
+
+AE_diff_plot_3 = AE_diff_plot %>%
+  select(1,2,3,4,6) %>%
+  replace(is.na(.), 0) %>%
+  filter(mz_minus_D != 0) %>% 
+  filter(AE.D != 0) %>% 
+  filter(AE == 0) %>% 
+  select(1,2,4)
+
+#theoretical Derivatization comparison AE_D vs. AE_ plus_D (AE)
+
+AE_diff_AE.D = AE_diff_plot %>% 
+  select(1:6) %>% 
+  replace(is.na(.), 0) %>%
+  filter(AE.D!= 0) %>% 
+  select(1,2,4)
+  
+AE_diff_AE_plus_D = AE_diff_plot %>% 
+  filter(AE != 0) %>% 
+  filter(mz_plus_D != 0) %>% 
+  dplyr::rename(AE.D_th = AE) %>% 
+  filter(!is.na(formula_isotopefree_plus_D)) %>% 
+  select(3,5,7)
+
+#theoretical Derivatization comparison AE vs. AED_ minus_D (AE)
+
+AE_diff_AE = AE_diff_plot %>% 
+  select(1:6) %>% 
+  replace(is.na(.), 0) %>%
+  filter(AE != 0) %>% 
+  select(1,2,3)
+ 
+AE_diff_AE.D_minus_D = AE_diff_plot %>% 
+  filter(AE.D != 0) %>% 
+  filter(mz_minus_D != 0) %>% 
+  dplyr::rename(AE_th = AE.D) %>% 
+  filter(!is.na(formula_isotopefree_minus_D)) %>% 
+  select(4,6,8)
+
+#join (AE)
+
+AE_diff_plot_AE_plus_D = AE_diff_AE.D %>% 
+  full_join(AE_diff_AE_plus_D, by = c("formula_isotopefree" = "formula_isotopefree_plus_D")) %>% 
+  replace(is.na(.), 0) %>%
+  mutate(mz = ifelse(mz != 0, mz, mz_plus_D)) %>% 
+  select(1,3,4) %>% 
+  dplyr::mutate(X = case_when(AE.D != 0 & AE.D_th != 0 ~ "Yes", 
+                               AE.D != 0 & AE.D_th == 0 ~ "AE.D",
+                               AE.D == 0 & AE.D_th != 0 ~ "AE.D_th")) %>% 
+  mutate(AE.D_th = -AE.D_th) %>% 
+  gather(sample, I, -mz,-X) %>% 
+  filter(I != 0)
+  
+
+AE_diff_plot_AE.D_minus_D = AE_diff_AE %>% 
+  full_join(AE_diff_AE.D_minus_D, by = c("formula_isotopefree" = "formula_isotopefree_minus_D")) %>% 
+  replace(is.na(.), 0) %>%
+  mutate(mz = ifelse(mz != 0, mz, mz_minus_D)) %>% 
+  select(1,3,4) %>% 
+  dplyr::mutate(X = case_when(AE != 0 & AE_th != 0 ~ "Yes", 
+                               AE != 0 & AE_th == 0 ~ "AE",
+                               AE == 0 & AE_th != 0 ~ "AE_th")) %>% 
+  mutate(AE_th = -AE_th) %>% 
+  gather(sample, I, -mz,-X) %>% 
+  filter(I != 0)
+
+
+#combine with samp data (NSW)
+
+NSW_diff_plot = NSW_diff_df1 %>% 
+  left_join(NSW_derivat_chem_2, by = c("formula_isotopefree", "mz"))
+
+NSW_diff_plot_1 = NSW_diff_plot %>% 
+  select(1,2,3,4) %>% 
+  replace(is.na(.), 0) %>% 
+  group_by(formula_isotopefree) %>% 
+  mutate(Diff_NSW = NSW - NSW.D) %>% 
+  dplyr::mutate(X = case_when(NSW.D != 0 & NSW != 0 ~ "Yes", 
+                               NSW.D != 0 & NSW == 0 ~ "NSW.D",
+                               NSW.D == 0 & NSW!= 0 ~ "NSW"))
+
+NSW_diff_plot_comp = NSW_diff_plot %>% 
+  select(1,3,4) %>% 
+  replace(is.na(.), 0) %>% 
+  dplyr::mutate(X = case_when(NSW.D != 0 & NSW != 0 ~ "Yes", 
+                               NSW.D != 0 & NSW == 0 ~ "NSW.D",
+                               NSW.D == 0 & NSW!= 0 ~ "NSW")) %>% 
+  mutate(NSW.D = -NSW.D) %>% 
+  gather(sample, I, -mz,-X) %>% 
+  filter(I != 0) %>% 
+  select(1,2,4)
+  
+
+#possible to derivatize
+
+NSW_diff_plot_2 = NSW_diff_plot %>%
+  select(1,2,3,4,5) %>%
+  replace(is.na(.), 0) %>%
+  filter(mz_plus_D != 0) %>% 
+  filter(NSW!=0) %>% 
+  select(1,2,3)
+
+#possible derivatized
+
+NSW_diff_plot_3 = NSW_diff_plot %>%
+  select(1,2,3,4,6) %>%
+  replace(is.na(.), 0) %>%
+  filter(mz_minus_D != 0) %>% 
+  filter(NSW.D != 0) %>% 
+  filter(NSW == 0) %>% 
+  select(1,2,4)
+
+#theoretical Derivatization comparison NSW_D vs. NSW_ plus_D (NSW)
+
+NSW_diff_NSW.D = NSW_diff_plot %>% 
+  select(1:6) %>% 
+  replace(is.na(.), 0) %>%
+  filter(NSW.D!= 0) %>% 
+  select(1,2,4)
+  
+NSW_diff_NSW_plus_D = NSW_diff_plot %>% 
+  filter(NSW != 0) %>% 
+  filter(mz_plus_D != 0) %>% 
+  dplyr::rename(NSW.D_th = NSW) %>% 
+  filter(!is.na(formula_isotopefree_plus_D)) %>% 
+  select(3,5,7)
+
+#theoretical Derivatization comparison NSW vs. NSWD_ minus_D (NSW)
+
+NSW_diff_NSW = NSW_diff_plot %>% 
+  select(1:6) %>% 
+  replace(is.na(.), 0) %>%
+  filter(NSW != 0) %>% 
+  select(1,2,3)
+ 
+NSW_diff_NSW.D_minus_D = NSW_diff_plot %>% 
+  filter(NSW.D != 0) %>% 
+  filter(mz_minus_D != 0) %>% 
+  dplyr::rename(NSW_th = NSW.D) %>% 
+  filter(!is.na(formula_isotopefree_minus_D)) %>% 
+  select(4,6,8)
+
+#join (NSW)
+
+NSW_diff_plot_NSW_plus_D = NSW_diff_NSW.D %>% 
+  full_join(NSW_diff_NSW_plus_D, by = c("formula_isotopefree" = "formula_isotopefree_plus_D")) %>% 
+  replace(is.na(.), 0) %>%
+  mutate(mz = ifelse(mz != 0, mz, mz_plus_D)) %>% 
+  select(1,3,4) %>% 
+  dplyr::mutate(X = case_when(NSW.D != 0 & NSW.D_th != 0 ~ "Yes", 
+                               NSW.D != 0 & NSW.D_th == 0 ~ "NSW.D",
+                               NSW.D == 0 & NSW.D_th != 0 ~ "NSW.D_th")) %>% 
+  mutate(NSW.D_th = -NSW.D_th) %>% 
+  gather(sample, I, -mz,-X) %>% 
+  filter(I != 0)
+  
+  
+
+NSW_diff_plot_NSW.D_minus_D = NSW_diff_NSW %>% 
+  full_join(NSW_diff_NSW.D_minus_D, by = c("formula_isotopefree" = "formula_isotopefree_minus_D")) %>% 
+  replace(is.na(.), 0) %>%
+  mutate(mz = ifelse(mz != 0, mz, mz_minus_D)) %>% 
+  select(1,3,4) %>% 
+  dplyr::mutate(X = case_when(NSW != 0 & NSW_th != 0 ~ "Yes", 
+                               NSW != 0 & NSW_th == 0 ~ "NSW",
+                               NSW == 0 & NSW_th != 0 ~ "NSW_th")) %>% 
+  mutate(NSW_th = -NSW_th) %>% 
+  gather(sample, I, -mz,-X) %>% 
+  filter(I != 0)
+
+#count occurrences
+
+table(AE_diff_plot_1['X'])
+
+
+table(AE_diff_plot_AE_plus_D['X'])
+#
+table(AE_diff_plot_AE.D_minus_D['X'])
+table(NSW_diff_plot_1['X'])
+table(NSW_diff_plot_NSW.D_minus_D['X'])
+table(NSW_diff_plot_NSW_plus_D['X'])
+
+```
+
+###3.7.2 different chemical observations
+
+```{r}
+
+pattern <- "(\\[[0-9]+\\])?([A-Za-z]+)([0-9]+)"
+
+#AE
+
+AE_diff_chem_prop = AE_diff_AE %>%
+  full_join(AE_diff_AE.D_minus_D, by = c("formula_isotopefree" = "formula_isotopefree_minus_D")) %>%
+  replace(is.na(.), 0) %>%
+  mutate(mz = ifelse(mz != 0, mz, mz_minus_D)) %>%
+  select(1,2,3,4) %>% 
+  mutate(Details = lapply(str_match_all(formula_isotopefree, pattern), as.data.frame)) %>%
+  unnest() %>%
+  transmute(mz,formula_isotopefree,AE,AE_th,
+    element = paste0( ifelse(is.na(V2),"",V2), V3 ),
+    number = V4
+  ) %>%
+  spread(key="element", value="number") %>% 
+  mutate_at(c("C","H","N","O","P","S"), as.numeric) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N+P))/(C-0.5*O-S-N-P)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N+P)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0)) %>% 
+  mutate(undefined = ifelse(Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined)%>% 
+  select(-undefined)
+
+
+AE_diff_chem_prop_plot = AE_diff_chem_prop %>% 
+  select(2:4,15:ncol(AE_diff_chem_prop)) %>% 
+  na_if(0) %>% 
+  mutate(AE = ifelse(AE >= 0, 1, NA)) %>% 
+  mutate(AE_th = ifelse(AE_th >= 0, 1, NA)) %>% 
+  gather(chem_prop, present,-formula_isotopefree,-AE, -AE_th) %>% 
+  gather(sample, Yeah,-formula_isotopefree, -chem_prop, -present) %>% 
+  drop_na(Yeah) %>% 
+  select(1:4) %>% 
+  drop_na(present) %>% 
+  count(sample,chem_prop)
+
+AE_diff_chem_prop_plot_AE = AE_diff_chem_prop_plot %>% 
+  filter(sample == "AE")
+
+AE_diff_chem_prop_plot_AE_th = AE_diff_chem_prop %>% 
+  dplyr::mutate(X = case_when(AE != 0 & AE_th != 0 ~ "Yes", 
+                               AE != 0 & AE_th == 0 ~ "AE",
+                               AE == 0 & AE_th != 0 ~ "AE_th")) %>% 
+  filter(X != "Yes") %>% 
+  select(1:18) %>% 
+  select(2:4,15:ncol(AE_diff_chem_prop)) %>% 
+  na_if(0) %>% 
+  mutate(AE = ifelse(AE >= 0, 1, NA)) %>% 
+  mutate(AE_th = ifelse(AE_th >= 0, 1, NA)) %>% 
+  gather(chem_prop, present,-formula_isotopefree,-AE, -AE_th) %>% 
+  gather(sample, Yeah,-formula_isotopefree, -chem_prop, -present) %>% 
+  drop_na(Yeah) %>% 
+  select(1:4) %>% 
+  drop_na(present) %>% 
+  count(sample,chem_prop)
+
+
+AE_diff_chem_prop_plot_AE_th = AE_diff_chem_prop_plot_AE_th %>% 
+    filter(sample == "AE_th")
+
+#NSW
+
+NSW_diff_chem_prop = NSW_diff_NSW %>%
+  full_join(NSW_diff_NSW.D_minus_D, by = c("formula_isotopefree" = "formula_isotopefree_minus_D")) %>%
+  replace(is.na(.), 0) %>%
+  mutate(mz = ifelse(mz != 0, mz, mz_minus_D)) %>%
+  select(1,2,3,4) %>% 
+  mutate(Details = lapply(str_match_all(formula_isotopefree, pattern), as.data.frame)) %>%
+  unnest() %>%
+  transmute(mz,formula_isotopefree,NSW,NSW_th,
+    element = paste0( ifelse(is.na(V2),"",V2), V3 ),
+    number = V4
+  ) %>%
+  spread(key="element", value="number") %>% 
+  mutate_at(c("C","H","N","O","P","S"), as.numeric) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N+P))/(C-0.5*O-S-N-P)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N+P)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0)) %>% 
+  mutate(undefined = ifelse(Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined)%>% 
+  select(-undefined)
+
+
+
+NSW_diff_chem_prop_plot = NSW_diff_chem_prop %>% 
+  select(2:4,15:ncol(NSW_diff_chem_prop)) %>% 
+  na_if(0) %>% 
+  mutate(NSW = ifelse(NSW >= 0, 1, NA)) %>% 
+  mutate(NSW_th = ifelse(NSW_th >= 0, 1, NA)) %>% 
+  gather(chem_prop, present,-formula_isotopefree,-NSW, -NSW_th) %>% 
+  gather(sample, Yeah,-formula_isotopefree, -chem_prop, -present) %>% 
+  drop_na(Yeah) %>% 
+  select(1:4) %>% 
+  drop_na(present) %>% 
+  count(sample,chem_prop)
+
+NSW_diff_chem_prop_plot_NSW = NSW_diff_chem_prop_plot %>% 
+  filter(sample == "NSW")
+
+NSW_diff_chem_prop_plot_NSW_th = NSW_diff_chem_prop %>% 
+  dplyr::mutate(X = case_when(NSW != 0 & NSW_th != 0 ~ "Yes", 
+                               NSW != 0 & NSW_th == 0 ~ "NSW",
+                               NSW == 0 & NSW_th != 0 ~ "NSW_th")) %>% 
+  filter(X != "Yes") %>% 
+  select(1:18) %>% 
+  select(2:4,15:ncol(NSW_diff_chem_prop)) %>% 
+  na_if(0) %>% 
+  mutate(NSW = ifelse(NSW >= 0, 1, NA)) %>% 
+  mutate(NSW_th = ifelse(NSW_th >= 0, 1, NA)) %>% 
+  gather(chem_prop, present,-formula_isotopefree,-NSW, -NSW_th) %>% 
+  gather(sample, Yeah,-formula_isotopefree, -chem_prop, -present) %>% 
+  drop_na(Yeah) %>% 
+  select(1:4) %>% 
+  drop_na(present) %>% 
+  count(sample,chem_prop)
+
+NSW_diff_chem_prop_plot_NSW_th = NSW_diff_chem_prop_plot_NSW_th %>% 
+    filter(sample == "NSW_th")
+
+#For D-SPE-DOM
+
+#AE
+
+AE.D_diff_chem_prop = AE_diff_AE.D %>%
+  full_join(AE_diff_AE_plus_D, by = c("formula_isotopefree" = "formula_isotopefree_plus_D")) %>%
+  replace(is.na(.), 0) %>%
+  mutate(mz = ifelse(mz != 0, mz, mz_plus_D)) %>%
+  select(1,2,3,4) %>% 
+  mutate(Details = lapply(str_match_all(formula_isotopefree, pattern), as.data.frame)) %>%
+  unnest() %>%
+  transmute(mz,formula_isotopefree,AE.D,AE.D_th,
+    element = paste0( ifelse(is.na(V2),"",V2), V3 ),
+    number = V4) %>%
+  spread(key="element", value="number") %>% 
+  mutate_at(c("C","H","N","O","P","S"), as.numeric) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N+P))/(C-0.5*O-S-N-P)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N+P)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0)) %>% 
+  mutate(undefined = ifelse(Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined)%>% 
+  select(-undefined)
+
+AE.D_diff_chem_prop_plot = AE.D_diff_chem_prop %>% 
+  select(2:4,15:ncol(AE.D_diff_chem_prop)) %>% 
+  na_if(0) %>% 
+  mutate(AE.D = ifelse(AE.D >= 0, 1, NA)) %>% 
+  mutate(AE.D_th = ifelse(AE.D_th >= 0, 1, NA)) %>% 
+  gather(chem_prop, present,-formula_isotopefree,-AE.D, -AE.D_th) %>% 
+  gather(sample, Yeah,-formula_isotopefree, -chem_prop, -present) %>% 
+  drop_na(Yeah) %>% 
+  select(1:4) %>% 
+  drop_na(present) %>% 
+  count(sample,chem_prop)
+
+AE.D_diff_chem_prop_plot_AE.D = AE.D_diff_chem_prop_plot %>% 
+  filter(sample == "AE.D")
+
+AE.D_diff_chem_prop_plot_AE.D_th = AE.D_diff_chem_prop %>% 
+  dplyr::mutate(X = case_when(AE.D != 0 & AE.D_th != 0 ~ "Yes", 
+                               AE.D != 0 & AE.D_th == 0 ~ "AE.D",
+                               AE.D == 0 & AE.D_th != 0 ~ "AE.D_th")) %>% 
+  filter(X != "Yes") %>% 
+  filter(AE.D != 0) %>% 
+  select(1:18) %>% 
+  select(2:4,15:ncol(AE.D_diff_chem_prop)) %>% 
+  na_if(0) %>% 
+  mutate(AE.D = ifelse(AE.D >= 0, 1, NA)) %>% 
+  mutate(AE.D_th = ifelse(AE.D_th >= 0, 1, NA)) %>% 
+  gather(chem_prop, present,-formula_isotopefree,-AE.D, -AE.D_th) %>% 
+  gather(sample, Yeah,-formula_isotopefree, -chem_prop, -present) %>% 
+  drop_na(Yeah) %>% 
+  select(1:4) %>% 
+  drop_na(present) %>% 
+  count(sample,chem_prop)
+
+AE.D_diff_chem_prop_plot_AE.D_th = AE.D_diff_chem_prop_plot_AE.D_th %>% 
+    filter(sample == "AE.D_th")
+
+#NSW.D
+
+NSW.D_diff_chem_prop = NSW_diff_NSW.D %>%
+  full_join(NSW_diff_NSW_plus_D, by = c("formula_isotopefree" = "formula_isotopefree_plus_D")) %>%
+  replace(is.na(.), 0) %>%
+  mutate(mz = ifelse(mz != 0, mz, mz_plus_D)) %>%
+  select(1,2,3,4) %>%
+  mutate(Details = lapply(str_match_all(formula_isotopefree, pattern), as.data.frame)) %>%
+  unnest() %>%
+  transmute(mz,formula_isotopefree,NSW.D,NSW.D_th,
+    element = paste0( ifelse(is.na(V2),"",V2), V3 ),
+    number = V4
+  ) %>%
+  spread(key="element", value="number") %>%
+  mutate_at(c("C","H","N","O","P","S"), as.numeric) %>%
+  replace(is.na(.), 0) %>%
+  mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N+P))/(C-0.5*O-S-N-P)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N+P)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0)) %>% 
+  mutate(undefined = ifelse(Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+  select(-undefined)
+
+
+NSW.D_diff_chem_prop_plot = NSW.D_diff_chem_prop %>% 
+  select(2:4,15:ncol(NSW.D_diff_chem_prop)) %>% 
+  na_if(0) %>% 
+  mutate(NSW.D = ifelse(NSW.D >= 0, 1, NA)) %>% 
+  mutate(NSW.D_th = ifelse(NSW.D_th >= 0, 1, NA)) %>% 
+  gather(chem_prop, present,-formula_isotopefree,-NSW.D, -NSW.D_th) %>% 
+  gather(sample, Yeah,-formula_isotopefree, -chem_prop, -present) %>% 
+  drop_na(Yeah) %>% 
+  select(1:4) %>% 
+  drop_na(present) %>% 
+  count(sample,chem_prop)
+
+NSW.D_diff_chem_prop_plot_NSW.D = NSW.D_diff_chem_prop_plot %>% 
+  filter(sample == "NSW.D")
+
+NSW.D_diff_chem_prop_plot_NSW.D_th = NSW.D_diff_chem_prop %>% 
+  dplyr::mutate(X = case_when(NSW.D != 0 & NSW.D_th != 0 ~ "Yes", 
+                               NSW.D != 0 & NSW.D_th == 0 ~ "NSW.D",
+                               NSW.D == 0 & NSW.D_th != 0 ~ "NSW.D_th")) %>% 
+  filter(X != "Yes") %>% 
+  filter(NSW.D != 0) %>% 
+  select(1:18) %>% 
+  select(2:4,15:ncol(NSW.D_diff_chem_prop)) %>% 
+  na_if(0) %>% 
+  mutate(NSW.D = ifelse(NSW.D >= 0, 1, NA)) %>% 
+  mutate(NSW.D_th = ifelse(NSW.D_th >= 0, 1, NA)) %>% 
+  gather(chem_prop, present,-formula_isotopefree,-NSW.D, -NSW.D_th) %>% 
+  gather(sample, Yeah,-formula_isotopefree, -chem_prop, -present) %>% 
+  drop_na(Yeah) %>% 
+  select(1:4) %>% 
+  drop_na(present) %>% 
+  count(sample,chem_prop)
+
+NSW.D_diff_chem_prop_plot_NSW.D_th = NSW.D_diff_chem_prop_plot_NSW.D_th %>% 
+    filter(sample == "NSW.D_th")
+
+
+
+# AE potential derivatizable
+
+AE_diff_chem_pot_D = AE.D_diff_chem_prop %>% 
+  dplyr::mutate(X = case_when(AE.D != 0 & AE.D_th != 0 ~ "Yes", 
+                               AE.D != 0 & AE.D_th == 0 ~ "NSW.D",
+                               AE.D == 0 & AE.D_th != 0 ~ "NSW.D_th")) %>% 
+  filter(X != "Yes") %>% 
+  filter(AE.D == 0) %>% 
+  select(2,4) %>% 
+  left_join(AE_derivat_chem_2, by = c("formula_isotopefree" = "formula_isotopefree_plus_D")) %>% 
+  select(2,4) %>% 
+  dplyr::rename(formula_isotopefree = formula_isotopefree.y) %>% 
+  left_join(AE_derivat_chem, by = c("formula_isotopefree" = "formula_isotopefree")) %>%
+  select(1:3,5:10) %>% 
+  mutate(Details = lapply(str_match_all(formula_isotopefree, pattern), as.data.frame)) %>%
+  unnest() %>%
+  transmute(mz,formula_isotopefree,AE.D_th,
+    element = paste0( ifelse(is.na(V2),"",V2), V3 ),
+    number = V4
+  ) %>%
+  spread(key="element", value="number") %>% 
+  mutate_at(c("C","H","N","O","P","S"), as.numeric) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N+P))/(C-0.5*O-S-N-P)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N+P)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0)) %>% 
+  mutate(undefined = ifelse(Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined)%>% 
+  select(-undefined)
+
+
+
+# AE potentially derivatized 
+
+AE_diff_chem_pot_D_1 = AE_diff_chem_prop %>%
+  filter(AE_th != 0) %>% 
+  select(2,4) %>% 
+  left_join(AE_derivat_chem_2, by = c("formula_isotopefree" = "formula_isotopefree_minus_D")) %>% 
+  select(2,4) %>% 
+  dplyr::rename(formula_isotopefree = formula_isotopefree.y) %>% 
+  left_join(AE_derivat_chem, by = c("formula_isotopefree" = "formula_isotopefree")) %>%
+  select(1:3,5:10) %>% 
+  mutate(Details = lapply(str_match_all(formula_isotopefree, pattern), as.data.frame)) %>%
+  unnest() %>%
+  transmute(mz,formula_isotopefree,AE_th,
+    element = paste0( ifelse(is.na(V2),"",V2), V3 ),
+    number = V4
+  ) %>%
+  spread(key="element", value="number") %>% 
+  mutate_at(c("C","H","N","O","S"), as.numeric) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N))/(C-0.5*O-S-N)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0)) %>% 
+  mutate(undefined = ifelse(Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined)
+
+AE_diff_chem_pot_D_1_plot = AE_diff_chem_pot_D_1 %>% 
+  select(2,3,14:ncol(AE_diff_chem_pot_D_1)) %>% 
+  na_if(0) %>% 
+  gather(chem_prop, present,-formula_isotopefree,-AE_th) %>% 
+  gather(sample, Yeah,-formula_isotopefree, -chem_prop, -present) %>% 
+  drop_na(Yeah) %>% 
+  select(1:4) %>% 
+  drop_na(present) %>% 
+  count(sample,chem_prop)
+
+
+# NSW potential derivatizable
+
+NSW_diff_chem_pot_D = NSW.D_diff_chem_prop %>% 
+  dplyr::mutate(X = case_when(NSW.D != 0 & NSW.D_th != 0 ~ "Yes", 
+                               NSW.D != 0 & NSW.D_th == 0 ~ "NSW.D",
+                               NSW.D == 0 & NSW.D_th != 0 ~ "NSW.D_th")) %>% 
+  filter(X != "Yes") %>% 
+  filter(NSW.D == 0) %>% 
+  select(2,4) %>% 
+  left_join(NSW_derivat_chem_2, by = c("formula_isotopefree" = "formula_isotopefree_plus_D")) %>% 
+  select(2,4) %>% 
+  dplyr::rename(formula_isotopefree = formula_isotopefree.y) %>% 
+  left_join(NSW_derivat_chem, by = c("formula_isotopefree" = "formula_isotopefree")) %>%
+  select(1:3,5:10) %>% 
+  mutate(Details = lapply(str_match_all(formula_isotopefree, pattern), as.data.frame)) %>%
+  unnest() %>%
+  transmute(mz,formula_isotopefree,NSW.D_th,
+    element = paste0( ifelse(is.na(V2),"",V2), V3 ),
+    number = V4
+  ) %>%
+  spread(key="element", value="number") %>% 
+  mutate_at(c("C","H","N","O","P","S"), as.numeric) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N+P))/(C-0.5*O-S-N-P)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N+P)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0)) %>% 
+  mutate(undefined = ifelse(Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined)%>% 
+  select(-undefined)
+
+
+
+# NSW potentially derivatized 
+
+NSW_diff_chem_pot_D_1 = NSW_diff_chem_prop %>%
+  filter(NSW_th != 0) %>% ## als letztes geändert von NSW == 0
+  select(2,4) %>% 
+  left_join(NSW_derivat_chem_2, by = c("formula_isotopefree" = "formula_isotopefree_minus_D")) %>% 
+  select(2,4) %>% 
+  dplyr::rename(formula_isotopefree = formula_isotopefree.y) %>% 
+  left_join(NSW_derivat_chem, by = c("formula_isotopefree" = "formula_isotopefree")) %>%
+  select(1:3,5:10) %>% 
+  mutate(Details = lapply(str_match_all(formula_isotopefree, pattern), as.data.frame)) %>%
+  unnest() %>%
+  transmute(mz,formula_isotopefree,NSW_th,
+    element = paste0( ifelse(is.na(V2),"",V2), V3 ),
+    number = V4
+  ) %>%
+  spread(key="element", value="number") %>% 
+  mutate_at(c("C","H","N","O","P","S"), as.numeric) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N+P))/(C-0.5*O-S-N-P)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N+P)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0)) %>% 
+  mutate(undefined = ifelse(Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined)%>% 
+  select(-undefined)
+
+
+```
+### SPE-DOM minus D
+
+```{r}
+
+# double D minus
+
+AE_diff_chem_SPE_DOM_minus_D = AE_diff_AE %>% 
+  select(2:3) %>% 
+  left_join(all_chem_AE_diff, by = c("formula_isotopefree" = "formula_isotopefree")) %>%
+  select(1:3,12:17) %>% 
+  mutate(mz_plus_D = ifelse((O != 0 & H != 0 | N != 0 & H != 0), mz + 104.02622, NA)) %>% 
+  mutate(mz_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N >= 1 & C >= 8 & H >= 5 & O >=1), mz - 104.02622, NA)) %>% 
+  mutate(C_plus_D = ifelse((O != 0 | N != 0), C+7, NA)) %>% 
+  mutate(H_plus_D = ifelse((O != 0 | N != 0), H+4, NA)) %>% 
+  mutate(O_plus_D = ifelse((O != 0 | N != 0), O+1, NA)) %>% 
+  mutate(C_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), C-7, NA)) %>% 
+  mutate(H_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), H-4, NA)) %>% 
+  mutate(O_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), O-1, NA)) %>% 
+  mutate(N_D = ifelse((N != 0 & C >= 1) , N, 0)) %>% 
+  mutate(P_D = ifelse((P != 0 & C >= 1) , P, 0)) %>%
+  mutate(S_D = ifelse((S != 0 & C >= 1) , S, 0)) %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  mutate(AI_mod_minus = (1+C_minus_D-0.5*O_minus_D-S_D-0.5*(H_minus_D+N_D+P_D))/(C_minus_D-0.5*O_minus_D-S_D-N_D-P_D)) %>%
+  mutate(AI_mod_plus = (1+C_plus_D-0.5*O_plus_D-S_D-0.5*(H_plus_D+N_D+P_D))/(C_plus_D-0.5*O_plus_D-S_D-N_D-P_D)) %>%
+  mutate(H.C_minus = H_minus_D/C_minus_D) %>%
+  mutate(O.C_minus = O_minus_D/C_minus_D) %>%
+  mutate(H.C_plus = H_plus_D/C_plus_D) %>%
+  mutate(O.C_plus = O_plus_D/C_plus_D) %>% 
+  mutate(AI_mod_minus = ifelse(AI_mod_minus <= 0, 0, AI_mod_minus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "-Inf", 0, AI_mod_minus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "Inf", 0, AI_mod_minus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus <= 0, 0, AI_mod_plus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "-Inf", 0, AI_mod_plus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "Inf", 0, AI_mod_plus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "NaN", 0, AI_mod_minus)) %>%
+  mutate(H.C_minus = ifelse(H.C_minus == "NaN", 0, H.C_minus)) %>%
+  mutate(O.C_minus = ifelse(O.C_minus == "NaN", 0, O.C_minus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "NaN", 0, AI_mod_plus)) %>%
+  mutate(H.C_plus = ifelse(H.C_plus == "NaN", 0, H.C_plus)) %>%
+  mutate(O.C_plus = ifelse(O.C_plus == "NaN", 0, O.C_plus)) %>%
+  mutate(DBE_minus = 1+0.5*(2*C_minus_D-H_minus_D+N_D+P_D)) %>%
+  mutate(DBE_plus = 1+0.5*(2*C_plus_D-H_plus_D+N_D+P_D)) %>%  
+  mutate(mz_plus_D = ifelse(between(AI_mod_plus, 0.01, 3) & between(H.C_plus, 0.25, 3) & O.C_plus < 2 | DBE_plus == 0, mz_plus_D, NA)) %>% 
+  mutate(mz_minus_D = ifelse(between(AI_mod_minus, 0.01, 3) & between(H.C_minus, 0.25, 3) & O.C_minus < 2 | DBE_minus == 0 , mz_minus_D, NA)) %>% 
+  mutate(mz_plus_D = ifelse(N_D > C_plus_D | S_D > C_plus_D | P_D > C_plus_D , NA , mz_plus_D)) %>% 
+  mutate(mz_minus_D = ifelse(N_D > C_minus_D | S_D > C_minus_D | P_D > C_minus_D , NA , mz_minus_D)) %>% 
+  mutate(C_plus_D = ifelse(is.na(mz_plus_D), NA, C_plus_D)) %>% 
+  mutate(H_plus_D = ifelse(is.na(mz_plus_D), NA, H_plus_D)) %>% 
+  mutate(O_plus_D = ifelse(is.na(mz_plus_D), NA, O_plus_D)) %>% 
+  mutate(C_minus_D = ifelse(is.na(mz_minus_D), NA, C_minus_D)) %>% 
+  mutate(H_minus_D = ifelse(is.na(mz_minus_D), NA, H_minus_D)) %>%  
+  mutate(O_minus_D = ifelse(is.na(mz_minus_D), NA, O_minus_D)) %>% 
+  mutate(N_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, N_D)) %>%  
+  mutate(P_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, P_D)) %>% 
+  mutate(S_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, S_D))%>% 
+  select(1:20) %>% 
+  mutate(across(where(is.numeric), ~na_if(., 0)))
+
+NSW_diff_chem_SPE_DOM_minus_D = NSW_diff_NSW %>% 
+  select(2:3) %>% 
+  left_join(all_chem_NSW_diff, by = c("formula_isotopefree" = "formula_isotopefree")) %>%
+  select(1:3,12:17) %>% 
+  mutate(mz_plus_D = ifelse((O != 0 & H != 0 | N != 0 & H != 0), mz + 104.02622, NA)) %>% 
+  mutate(mz_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N >= 1 & C >= 8 & H >= 5 & O >=1), mz - 104.02622, NA)) %>% 
+  mutate(C_plus_D = ifelse((O != 0 | N != 0), C+7, NA)) %>% 
+  mutate(H_plus_D = ifelse((O != 0 | N != 0), H+4, NA)) %>% 
+  mutate(O_plus_D = ifelse((O != 0 | N != 0), O+1, NA)) %>% 
+  mutate(C_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), C-7, NA)) %>% 
+  mutate(H_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), H-4, NA)) %>% 
+  mutate(O_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), O-1, NA)) %>% 
+  mutate(N_D = ifelse((N != 0 & C >= 1) , N, 0)) %>% 
+  mutate(P_D = ifelse((P != 0 & C >= 1) , P, 0)) %>%
+  mutate(S_D = ifelse((S != 0 & C >= 1) , S, 0)) %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  mutate(AI_mod_minus = (1+C_minus_D-0.5*O_minus_D-S_D-0.5*(H_minus_D+N_D+P_D))/(C_minus_D-0.5*O_minus_D-S_D-N_D-P_D)) %>%
+  mutate(AI_mod_plus = (1+C_plus_D-0.5*O_plus_D-S_D-0.5*(H_plus_D+N_D+P_D))/(C_plus_D-0.5*O_plus_D-S_D-N_D-P_D)) %>%
+  mutate(H.C_minus = H_minus_D/C_minus_D) %>%
+  mutate(O.C_minus = O_minus_D/C_minus_D) %>%
+  mutate(H.C_plus = H_plus_D/C_plus_D) %>%
+  mutate(O.C_plus = O_plus_D/C_plus_D) %>% 
+  mutate(AI_mod_minus = ifelse(AI_mod_minus <= 0, 0, AI_mod_minus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "-Inf", 0, AI_mod_minus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "Inf", 0, AI_mod_minus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus <= 0, 0, AI_mod_plus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "-Inf", 0, AI_mod_plus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "Inf", 0, AI_mod_plus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "NaN", 0, AI_mod_minus)) %>%
+  mutate(H.C_minus = ifelse(H.C_minus == "NaN", 0, H.C_minus)) %>%
+  mutate(O.C_minus = ifelse(O.C_minus == "NaN", 0, O.C_minus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "NaN", 0, AI_mod_plus)) %>%
+  mutate(H.C_plus = ifelse(H.C_plus == "NaN", 0, H.C_plus)) %>%
+  mutate(O.C_plus = ifelse(O.C_plus == "NaN", 0, O.C_plus)) %>%
+  mutate(DBE_minus = 1+0.5*(2*C_minus_D-H_minus_D+N_D+P_D)) %>%
+  mutate(DBE_plus = 1+0.5*(2*C_plus_D-H_plus_D+N_D+P_D)) %>%  
+  mutate(mz_plus_D = ifelse(between(AI_mod_plus, 0.01, 3) & between(H.C_plus, 0.25, 3) & O.C_plus < 2 | DBE_plus == 0, mz_plus_D, NA)) %>% 
+  mutate(mz_minus_D = ifelse(between(AI_mod_minus, 0.01, 3) & between(H.C_minus, 0.25, 3) & O.C_minus < 2 | DBE_minus == 0 , mz_minus_D, NA)) %>% 
+  mutate(mz_plus_D = ifelse(N_D > C_plus_D | S_D > C_plus_D | P_D > C_plus_D , NA , mz_plus_D)) %>% 
+  mutate(mz_minus_D = ifelse(N_D > C_minus_D | S_D > C_minus_D | P_D > C_minus_D , NA , mz_minus_D)) %>% 
+  mutate(C_plus_D = ifelse(is.na(mz_plus_D), NA, C_plus_D)) %>% 
+  mutate(H_plus_D = ifelse(is.na(mz_plus_D), NA, H_plus_D)) %>% 
+  mutate(O_plus_D = ifelse(is.na(mz_plus_D), NA, O_plus_D)) %>% 
+  mutate(C_minus_D = ifelse(is.na(mz_minus_D), NA, C_minus_D)) %>% 
+  mutate(H_minus_D = ifelse(is.na(mz_minus_D), NA, H_minus_D)) %>%  
+  mutate(O_minus_D = ifelse(is.na(mz_minus_D), NA, O_minus_D)) %>% 
+  mutate(N_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, N_D)) %>%  
+  mutate(P_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, P_D)) %>% 
+  mutate(S_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, S_D))%>% 
+  select(1:20) %>% 
+  mutate(across(where(is.numeric), ~na_if(., 0)))
+
+
+# add character to column (AE)
+
+NSW_diff_chem_SPE_DOM_minus_D$C_minus_D <- sub("^", "C", NSW_diff_chem_SPE_DOM_minus_D$C_minus_D)
+NSW_diff_chem_SPE_DOM_minus_D$H_minus_D <- sub("^", "H", NSW_diff_chem_SPE_DOM_minus_D$H_minus_D)
+NSW_diff_chem_SPE_DOM_minus_D$O_minus_D <- sub("^", "O", NSW_diff_chem_SPE_DOM_minus_D$O_minus_D)
+NSW_diff_chem_SPE_DOM_minus_D$N_D <- sub("^", "N", NSW_diff_chem_SPE_DOM_minus_D$N_D)
+NSW_diff_chem_SPE_DOM_minus_D$P_D <- sub("^", "P", NSW_diff_chem_SPE_DOM_minus_D$P_D)
+NSW_diff_chem_SPE_DOM_minus_D$S_D <- sub("^", "S", NSW_diff_chem_SPE_DOM_minus_D$S_D)
+
+# add character to column (NSW)
+
+AE_diff_chem_SPE_DOM_minus_D$C_minus_D <- sub("^", "C", AE_diff_chem_SPE_DOM_minus_D$C_minus_D)
+AE_diff_chem_SPE_DOM_minus_D$H_minus_D <- sub("^", "H", AE_diff_chem_SPE_DOM_minus_D$H_minus_D)
+AE_diff_chem_SPE_DOM_minus_D$O_minus_D <- sub("^", "O", AE_diff_chem_SPE_DOM_minus_D$O_minus_D)
+AE_diff_chem_SPE_DOM_minus_D$N_D <- sub("^", "N", AE_diff_chem_SPE_DOM_minus_D$N_D)
+AE_diff_chem_SPE_DOM_minus_D$P_D <- sub("^", "P", AE_diff_chem_SPE_DOM_minus_D$P_D)
+AE_diff_chem_SPE_DOM_minus_D$S_D <- sub("^", "S", AE_diff_chem_SPE_DOM_minus_D$S_D)
+
+AE_diff_chem_SPE_DOM_minus_D_1 = AE_diff_chem_SPE_DOM_minus_D %>% 
+   unite("formula_isotopefree_minus_D", C_minus_D,H_minus_D,O_minus_D,N_D,P_D,S_D, remove = FALSE, sep = "")
+
+AE_diff_chem_SPE_DOM_minus_D_1$formula_isotopefree_minus_D<-gsub("NA","",as.character(AE_diff_chem_SPE_DOM_minus_D_1$formula_isotopefree_minus_D))
+
+AE_diff_chem_SPE_DOM_minus_D_2 = AE_diff_chem_SPE_DOM_minus_D_1 %>% 
+  mutate(formula_isotopefree_minus_D = ifelse(mz_minus_D <= 30, NA, formula_isotopefree_minus_D)) %>% 
+  select(2,11,15) %>% 
+  filter(mz_minus_D >= 0)
+
+AE_diff_chem_SPE_DOM_pot_D = AE_diff_chem_SPE_DOM_minus_D_1 %>% 
+  mutate(formula_isotopefree_minus_D = ifelse(mz_minus_D <= 30, NA, formula_isotopefree_minus_D)) %>% 
+  select(1:3,10:11) 
+
+
+
+#combine to new formula_column (NSW)
+  
+NSW_diff_chem_SPE_DOM_minus_D_1 = NSW_diff_chem_SPE_DOM_minus_D %>% 
+   unite("formula_isotopefree_minus_D", C_minus_D,H_minus_D,O_minus_D,N_D,P_D,S_D, remove = FALSE, sep = "")
+
+NSW_diff_chem_SPE_DOM_minus_D_1$formula_isotopefree_minus_D<-gsub("NA","",as.character(NSW_diff_chem_SPE_DOM_minus_D_1$formula_isotopefree_minus_D))
+
+NSW_diff_chem_SPE_DOM_minus_D_2 = NSW_diff_chem_SPE_DOM_minus_D_1 %>% 
+  mutate(formula_isotopefree_minus_D = ifelse(mz_minus_D <= 30, NA, formula_isotopefree_minus_D)) %>% 
+  select(2,11,15) %>% 
+  filter(mz_minus_D >= 0)
+
+
+
+#molecular properties
+
+
+#AE
+
+AE_diff_chem_SPE_DOM_minus_D_prop = AE_diff_chem_SPE_DOM_minus_D_2 %>%
+  mutate(Details = lapply(str_match_all(formula_isotopefree_minus_D, pattern), as.data.frame)) %>%
+  unnest() %>%
+  transmute(mz_minus_D,formula_isotopefree_minus_D,AE,
+    element = paste0( ifelse(is.na(V2),"",V2), V3 ),
+    number = V4
+  ) %>%
+  spread(key="element", value="number") %>% 
+  mutate_at(c("C","H","N","O","P","S"), as.numeric) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N+P))/(C-0.5*O-S-N-P)) %>%
+  mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N+P)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0))
+
+
+AE_diff_chem_SPE_DOM_minus_D_prop_plot = AE_diff_chem_SPE_DOM_minus_D_prop %>% 
+  select(2:3,14:ncol(AE_diff_chem_SPE_DOM_minus_D_prop)) %>% 
+  na_if(0) %>% 
+  mutate(AE = ifelse(AE >= 0, 1, NA)) %>% 
+  gather(chem_prop, present,-formula_isotopefree_minus_D, -AE) %>% 
+  gather(sample, Yeah,-formula_isotopefree_minus_D, -chem_prop, -present) %>% 
+  drop_na(Yeah) %>% 
+  select(1:4) %>% 
+  drop_na(present) %>% 
+  count(sample,chem_prop)
+
+#NSW
+
+NSW_diff_chem_SPE_DOM_minus_D_prop = NSW_diff_chem_SPE_DOM_minus_D_2 %>%
+  mutate(Details = lapply(str_match_all(formula_isotopefree_minus_D, pattern), as.data.frame)) %>%
+  unnest() %>%
+  transmute(mz_minus_D,formula_isotopefree_minus_D,NSW,
+    element = paste0( ifelse(is.na(V2),"",V2), V3 ),
+    number = V4
+  ) %>%
+  spread(key="element", value="number") %>% 
+  mutate_at(c("C","H","N","O","P","S"), as.numeric) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N+P))/(C-0.5*O-S-N-P)) %>%
+  mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N+P)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0))
+
+NSW_diff_chem_SPE_DOM_minus_D_prop_plot = NSW_diff_chem_SPE_DOM_minus_D_prop %>% 
+  select(2:3,14:ncol(NSW_diff_chem_SPE_DOM_minus_D_prop)) %>% 
+  na_if(0) %>% 
+  mutate(NSW = ifelse(NSW >= 0, 1, NA)) %>% 
+  gather(chem_prop, present,-formula_isotopefree_minus_D, -NSW) %>% 
+  gather(sample, Yeah,-formula_isotopefree_minus_D, -chem_prop, -present) %>% 
+  drop_na(Yeah) %>% 
+  select(1:4) %>% 
+  drop_na(present) %>% 
+  count(sample,chem_prop)
+
+#potentially derivatized / potentially derivatizable
+
+AE_diff_chem_SPE_DOM_pot_D = AE_diff_chem_SPE_DOM_minus_D_1 %>% 
+  mutate(formula_isotopefree_minus_D = ifelse(mz_minus_D <= 30, NA, formula_isotopefree_minus_D)) %>% 
+  select(1:3,10:11) 
+
+NSW_diff_chem_SPE_DOM_pot_D = NSW_diff_chem_SPE_DOM_minus_D_1 %>% 
+  mutate(formula_isotopefree_minus_D = ifelse(mz_minus_D <= 30, NA, formula_isotopefree_minus_D)) %>% 
+  select(1:3,10:11) 
+
+
+```
+
+### double diff
+
+```{r}
+
+# double D minus
+
+AE_diff_chem_double = AE_diff_chem_prop %>% 
+  filter(AE_th != 0) %>% 
+  select(1:2,4:10) %>% 
+  mutate(across(where(is.integer), as.numeric)) %>% 
+  mutate(mz_plus_D = ifelse((O != 0 & H != 0 | N != 0 & H != 0), mz + 104.02622, NA)) %>% 
+  mutate(mz_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N >= 1 & C >= 8 & H >= 5 & O >=1), mz - 104.02622, NA)) %>% 
+  mutate(C_plus_D = ifelse((O != 0 | N != 0), C+7, NA)) %>% 
+  mutate(H_plus_D = ifelse((O != 0 | N != 0), H+4, NA)) %>% 
+  mutate(O_plus_D = ifelse((O != 0 | N != 0), O+1, NA)) %>% 
+  mutate(C_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), C-7, NA)) %>% 
+  mutate(H_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), H-4, NA)) %>% 
+  mutate(O_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), O-1, NA)) %>% 
+  mutate(N_D = ifelse((N != 0 & C >= 1) , N, 0)) %>% 
+  mutate(P_D = ifelse((P != 0 & C >= 1) , P, 0)) %>%
+  mutate(S_D = ifelse((S != 0 & C >= 1) , S, 0)) %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  mutate(AI_mod_minus = (1+C_minus_D-0.5*O_minus_D-S_D-0.5*(H_minus_D+N_D+P_D))/(C_minus_D-0.5*O_minus_D-S_D-N_D-P_D)) %>%
+  mutate(AI_mod_plus = (1+C_plus_D-0.5*O_plus_D-S_D-0.5*(H_plus_D+N_D+P_D))/(C_plus_D-0.5*O_plus_D-S_D-N_D-P_D)) %>%
+  mutate(H.C_minus = H_minus_D/C_minus_D) %>%
+  mutate(O.C_minus = O_minus_D/C_minus_D) %>%
+  mutate(H.C_plus = H_plus_D/C_plus_D) %>%
+  mutate(O.C_plus = O_plus_D/C_plus_D) %>% 
+  mutate(AI_mod_minus = ifelse(AI_mod_minus <= 0, 0, AI_mod_minus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "-Inf", 0, AI_mod_minus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "Inf", 0, AI_mod_minus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus <= 0, 0, AI_mod_plus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "-Inf", 0, AI_mod_plus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "Inf", 0, AI_mod_plus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "NaN", 0, AI_mod_minus)) %>%
+  mutate(H.C_minus = ifelse(H.C_minus == "NaN", 0, H.C_minus)) %>%
+  mutate(O.C_minus = ifelse(O.C_minus == "NaN", 0, O.C_minus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "NaN", 0, AI_mod_plus)) %>%
+  mutate(H.C_plus = ifelse(H.C_plus == "NaN", 0, H.C_plus)) %>%
+  mutate(O.C_plus = ifelse(O.C_plus == "NaN", 0, O.C_plus)) %>%
+  mutate(DBE_minus = 1+0.5*(2*C_minus_D-H_minus_D+N_D+P_D)) %>%
+  mutate(DBE_plus = 1+0.5*(2*C_plus_D-H_plus_D+N_D+P_D)) %>%  
+  mutate(mz_plus_D = ifelse(between(AI_mod_plus, 0.01, 3) & between(H.C_plus, 0.25, 3) & O.C_plus < 2 | DBE_plus == 0, mz_plus_D, NA)) %>% 
+  mutate(mz_minus_D = ifelse(between(AI_mod_minus, 0.01, 3) & between(H.C_minus, 0.25, 3) & O.C_minus < 2 | DBE_minus == 0 , mz_minus_D, NA)) %>% 
+  mutate(mz_plus_D = ifelse(N_D > C_plus_D | S_D > C_plus_D | P_D > C_plus_D , NA , mz_plus_D)) %>% 
+  mutate(mz_minus_D = ifelse(N_D > C_minus_D | S_D > C_minus_D | P_D > C_minus_D , NA , mz_minus_D)) %>% 
+  mutate(C_plus_D = ifelse(is.na(mz_plus_D), NA, C_plus_D)) %>% 
+  mutate(H_plus_D = ifelse(is.na(mz_plus_D), NA, H_plus_D)) %>% 
+  mutate(O_plus_D = ifelse(is.na(mz_plus_D), NA, O_plus_D)) %>% 
+  mutate(C_minus_D = ifelse(is.na(mz_minus_D), NA, C_minus_D)) %>% 
+  mutate(H_minus_D = ifelse(is.na(mz_minus_D), NA, H_minus_D)) %>%  
+  mutate(O_minus_D = ifelse(is.na(mz_minus_D), NA, O_minus_D)) %>% 
+  mutate(N_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, N_D)) %>%  
+  mutate(P_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, P_D)) %>% 
+  mutate(S_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, S_D))%>% 
+  
+  select(1:20) %>% 
+  mutate(across(where(is.numeric), ~na_if(., 0)))
+
+
+NSW_diff_chem_double = NSW_diff_chem_prop %>% 
+  filter(NSW_th != 0) %>% 
+  select(1:2,4:10) %>% 
+  mutate(across(where(is.integer), as.numeric)) %>% 
+  mutate(mz_plus_D = ifelse((O != 0 & H != 0 | N != 0 & H != 0), mz + 104.02622, NA)) %>% 
+  mutate(mz_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N >= 1 & C >= 8 & H >= 5 & O >=1), mz - 104.02622, NA)) %>% 
+  mutate(C_plus_D = ifelse((O != 0 | N != 0), C+7, NA)) %>% 
+  mutate(H_plus_D = ifelse((O != 0 | N != 0), H+4, NA)) %>% 
+  mutate(O_plus_D = ifelse((O != 0 | N != 0), O+1, NA)) %>% 
+  mutate(C_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), C-7, NA)) %>% 
+  mutate(H_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), H-4, NA)) %>% 
+  mutate(O_minus_D = ifelse((O > 1 & C >= 8  & H >= 5 | N > 1 & C >= 8  & H >= 5 & O >=1), O-1, NA)) %>% 
+  mutate(N_D = ifelse((N != 0 & C >= 1) , N, 0)) %>% 
+  mutate(P_D = ifelse((P != 0 & C >= 1) , P, 0)) %>%
+  mutate(S_D = ifelse((S != 0 & C >= 1) , S, 0)) %>% 
+  mutate(across(where(is.numeric), round, 5)) %>% 
+  mutate(AI_mod_minus = (1+C_minus_D-0.5*O_minus_D-S_D-0.5*(H_minus_D+N_D+P_D))/(C_minus_D-0.5*O_minus_D-S_D-N_D-P_D)) %>%
+  mutate(AI_mod_plus = (1+C_plus_D-0.5*O_plus_D-S_D-0.5*(H_plus_D+N_D+P_D))/(C_plus_D-0.5*O_plus_D-S_D-N_D-P_D)) %>%
+  mutate(H.C_minus = H_minus_D/C_minus_D) %>%
+  mutate(O.C_minus = O_minus_D/C_minus_D) %>%
+  mutate(H.C_plus = H_plus_D/C_plus_D) %>%
+  mutate(O.C_plus = O_plus_D/C_plus_D) %>% 
+  mutate(AI_mod_minus = ifelse(AI_mod_minus <= 0, 0, AI_mod_minus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "-Inf", 0, AI_mod_minus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "Inf", 0, AI_mod_minus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus <= 0, 0, AI_mod_plus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "-Inf", 0, AI_mod_plus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "Inf", 0, AI_mod_plus)) %>%
+  mutate(AI_mod_minus = ifelse(AI_mod_minus == "NaN", 0, AI_mod_minus)) %>%
+  mutate(H.C_minus = ifelse(H.C_minus == "NaN", 0, H.C_minus)) %>%
+  mutate(O.C_minus = ifelse(O.C_minus == "NaN", 0, O.C_minus)) %>%
+  mutate(AI_mod_plus = ifelse(AI_mod_plus == "NaN", 0, AI_mod_plus)) %>%
+  mutate(H.C_plus = ifelse(H.C_plus == "NaN", 0, H.C_plus)) %>%
+  mutate(O.C_plus = ifelse(O.C_plus == "NaN", 0, O.C_plus)) %>%
+  mutate(DBE_minus = 1+0.5*(2*C_minus_D-H_minus_D+N_D+P_D)) %>%
+  mutate(DBE_plus = 1+0.5*(2*C_plus_D-H_plus_D+N_D+P_D)) %>%  
+  mutate(mz_plus_D = ifelse(between(AI_mod_plus, 0.01, 3) & between(H.C_plus, 0.25, 3) & O.C_plus < 2 | DBE_plus == 0, mz_plus_D, NA)) %>% 
+  mutate(mz_minus_D = ifelse(between(AI_mod_minus, 0.01, 3) & between(H.C_minus, 0.25, 3) & O.C_minus < 2 | DBE_minus == 0 , mz_minus_D, NA)) %>% 
+  mutate(mz_plus_D = ifelse(N_D > C_plus_D | S_D > C_plus_D | P_D > C_plus_D , NA , mz_plus_D)) %>% 
+  mutate(mz_minus_D = ifelse(N_D > C_minus_D | S_D > C_minus_D | P_D > C_minus_D , NA , mz_minus_D)) %>% 
+  mutate(C_plus_D = ifelse(is.na(mz_plus_D), NA, C_plus_D)) %>% 
+  mutate(H_plus_D = ifelse(is.na(mz_plus_D), NA, H_plus_D)) %>% 
+  mutate(O_plus_D = ifelse(is.na(mz_plus_D), NA, O_plus_D)) %>% 
+  mutate(C_minus_D = ifelse(is.na(mz_minus_D), NA, C_minus_D)) %>% 
+  mutate(H_minus_D = ifelse(is.na(mz_minus_D), NA, H_minus_D)) %>%  
+  mutate(O_minus_D = ifelse(is.na(mz_minus_D), NA, O_minus_D)) %>% 
+  mutate(N_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, N_D)) %>%  
+  mutate(P_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, P_D)) %>% 
+  mutate(S_D = ifelse(is.na(mz_minus_D)&is.na(mz_plus_D), NA, S_D))%>% 
+  select(1:20) %>% 
+  mutate(across(where(is.numeric), ~na_if(., 0)))
+
+
+# add character to column (AE)
+
+NSW_diff_chem_double$C_minus_D <- sub("^", "C", NSW_diff_chem_double$C_minus_D)
+NSW_diff_chem_double$H_minus_D <- sub("^", "H", NSW_diff_chem_double$H_minus_D)
+NSW_diff_chem_double$O_minus_D <- sub("^", "O", NSW_diff_chem_double$O_minus_D)
+NSW_diff_chem_double$N_D <- sub("^", "N", NSW_diff_chem_double$N_D)
+NSW_diff_chem_double$P_D <- sub("^", "P", NSW_diff_chem_double$P_D)
+NSW_diff_chem_double$S_D <- sub("^", "S", NSW_diff_chem_double$S_D)
+
+# add character to column (NSW)
+
+AE_diff_chem_double$C_minus_D <- sub("^", "C", AE_diff_chem_double$C_minus_D)
+AE_diff_chem_double$H_minus_D <- sub("^", "H", AE_diff_chem_double$H_minus_D)
+AE_diff_chem_double$O_minus_D <- sub("^", "O", AE_diff_chem_double$O_minus_D)
+AE_diff_chem_double$N_D <- sub("^", "N", AE_diff_chem_double$N_D)
+AE_diff_chem_double$P_D <- sub("^", "P", AE_diff_chem_double$P_D)
+AE_diff_chem_double$S_D <- sub("^", "S", AE_diff_chem_double$S_D)
+
+
+AE_diff_chem_double_1 = AE_diff_chem_double %>% 
+   unite("formula_isotopefree_minus_D", C_minus_D,H_minus_D,O_minus_D,N_D,P_D,S_D, remove = FALSE, sep = "")
+
+AE_diff_chem_double_1$formula_isotopefree_minus_D<-gsub("NA","",as.character(AE_diff_chem_double_1$formula_isotopefree_minus_D))
+
+AE_diff_chem_double_2 = AE_diff_chem_double_1 %>% 
+  mutate(formula_isotopefree_minus_D = ifelse(mz_minus_D <= 50, NA, formula_isotopefree_minus_D)) %>% 
+  select(3,11,15) %>% 
+  filter(mz_minus_D >= 0)
+
+AE_diff_chem_double_2 = delete.na(AE_diff_chem_double_2, 0)
+
+
+#combine to new formula_column (NSW)
+  
+NSW_diff_chem_double_1 = NSW_diff_chem_double %>% 
+   unite("formula_isotopefree_minus_D", C_minus_D,H_minus_D,O_minus_D,N_D,P_D,S_D, remove = FALSE, sep = "")
+
+NSW_diff_chem_double_1$formula_isotopefree_minus_D<-gsub("NA","",as.character(NSW_diff_chem_double_1$formula_isotopefree_minus_D))
+
+NSW_diff_chem_double_2 = NSW_diff_chem_double_1 %>% 
+  mutate(formula_isotopefree_minus_D = ifelse(mz_minus_D <= 50, NA, formula_isotopefree_minus_D)) %>% 
+  select(3,11,15) %>% 
+  filter(mz_minus_D >= 0)
+
+NSW_diff_chem_double_2 = delete.na(NSW_diff_chem_double_2, 0)
+
+#molecular properties
+
+
+#AE
+
+AE_diff_chem_double_prop = AE_diff_chem_double_2 %>%
+  mutate(Details = lapply(str_match_all(formula_isotopefree_minus_D, pattern), as.data.frame)) %>%
+  unnest() %>%
+  transmute(mz_minus_D,formula_isotopefree_minus_D,AE_th,
+    element = paste0( ifelse(is.na(V2),"",V2), V3 ),
+    number = V4
+  ) %>%
+  spread(key="element", value="number") %>% 
+  mutate_at(c("C","H","N","O","S"), as.numeric) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N))/(C-0.5*O-S-N)) %>%
+  mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0))
+
+
+AE_diff_chem_double_prop_plot = AE_diff_chem_double_prop %>% 
+  select(2:3,14:ncol(AE_diff_chem_double_prop)) %>% 
+  na_if(0) %>% 
+  mutate(AE_th = ifelse(AE_th >= 0, 1, NA)) %>% 
+  gather(chem_prop, present,-formula_isotopefree_minus_D, -AE_th) %>% 
+  gather(sample, Yeah,-formula_isotopefree_minus_D, -chem_prop, -present) %>% 
+  drop_na(Yeah) %>% 
+  select(1:4) %>% 
+  drop_na(present) %>% 
+  count(sample,chem_prop)
+
+#NSW
+
+NSW_diff_chem_double_prop = NSW_diff_chem_double_2 %>%
+  mutate(Details = lapply(str_match_all(formula_isotopefree_minus_D, pattern), as.data.frame)) %>%
+  unnest() %>%
+  transmute(mz_minus_D,formula_isotopefree_minus_D,NSW_th,
+    element = paste0( ifelse(is.na(V2),"",V2), V3 ),
+    number = V4
+  ) %>%
+  spread(key="element", value="number") %>% 
+  mutate_at(c("C","H","N","O","P","S"), as.numeric) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(AI_mod = (1+C-0.5*O-S-0.5*(H+N+P))/(C-0.5*O-S-N-P)) %>%
+  mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(DBE = 1+0.5*(2*C-H+N+P)) %>%
+  mutate(H.C = H/C) %>%
+  mutate(O.C = O/C) %>%
+  mutate(Aromatic = ifelse(between(AI_mod, 0.5, 3) & H.C < 3, 1, 0)) %>%
+  mutate(Highly_unsaturated = ifelse(AI_mod < 0.5 & AI_mod > 0 & H.C < 1.5, 1, 0)) %>%
+  mutate(Unsaturated = ifelse(between(H.C, 1.5, 2), 1, 0)) %>%
+  mutate(Saturated = ifelse(DBE == 0, 1, 0))
+
+NSW_diff_chem_double_prop_plot = NSW_diff_chem_double_prop %>% 
+  select(2:3,14:ncol(NSW_diff_chem_double_prop)) %>% 
+  na_if(0) %>% 
+  mutate(NSW_th = ifelse(NSW_th >= 0, 1, NA)) %>% 
+  gather(chem_prop, present,-formula_isotopefree_minus_D, -NSW_th) %>% 
+  gather(sample, Yeah,-formula_isotopefree_minus_D, -chem_prop, -present) %>% 
+  drop_na(Yeah) %>% 
+  select(1:4) %>% 
+  drop_na(present) %>% 
+  count(sample,chem_prop)
+
+
+
+
+```
+
+
+# table with counts
+
+```{r}
+
+
+#AE SPE-DOM and D-SPE-DOM minus D
+
+AE_table_AE_SPE_DOM = AE_diff_chem_prop %>% 
+  dplyr::rename(AE_SPE_DOM = AE) %>% 
+  filter(AE_SPE_DOM != 0) %>% 
+  select(1:3,5:ncol(AE_diff_chem_prop)) %>% 
+        mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+    mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+            H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+      
+      AI_mod_mean = mean(AI_mod),
+      
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("AE_SPE_DOM"))
+
+AE_table_AE_D_SPE_DOM_minus_D = AE_diff_chem_prop %>% 
+  dplyr::mutate(X = case_when(AE != 0 & AE_th != 0 ~ "Yes", 
+                               AE != 0 & AE_th == 0 ~ "AE",
+                               AE == 0 & AE_th != 0 ~ "AE_th")) %>% 
+  filter(X != "Yes") %>% 
+  dplyr::rename(AE_D_SPE_DOM_minus_D = AE_th) %>% 
+    filter(AE_D_SPE_DOM_minus_D != 0) %>% 
+  select(1:2,4:ncol(AE_diff_chem_prop)) %>% 
+        mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+    mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+      H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("AE_D_SPE_DOM_minus_D"))
+
+
+
+
+#NSW SPE-DOM and D-SPE-DOM minus D
+
+NSW_table_NSW_SPE_DOM = NSW_diff_chem_prop %>% 
+  dplyr::rename(NSW_SPE_DOM = NSW) %>% 
+  filter(NSW_SPE_DOM != 0) %>% 
+  select(1:3,5:ncol(NSW_diff_chem_prop)) %>% 
+        mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+    mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+      H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+            AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("NSW_SPE_DOM"))
+
+  
+
+NSW_table_NSW_D_SPE_DOM_minus_D = NSW_diff_chem_prop %>% 
+  dplyr::mutate(X = case_when(NSW != 0 & NSW_th != 0 ~ "Yes", 
+                               NSW != 0 & NSW_th == 0 ~ "NSW",
+                               NSW == 0 & NSW_th != 0 ~ "NSW_th")) %>% 
+  filter(X != "Yes") %>% 
+  dplyr::rename(NSW_D_SPE_DOM_minus_D = NSW_th) %>% 
+    filter(NSW_D_SPE_DOM_minus_D != 0) %>% 
+  select(1:2,4:ncol(NSW_diff_chem_prop)) %>% 
+      mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+    mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(H.C = ifelse(H.C == "NaN", 0, H.C)) %>% 
+  mutate(undefined = ifelse(Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+      Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+      H.C_mean = mean(H.C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),              
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("NSW_D_SPE_DOM_minus_D"))
+
+
+
+#AE D-SPE-DOM and SPE-DOM plus D
+
+AE.D_table_AE_D_SPE_DOM = AE.D_diff_chem_prop %>% 
+  dplyr::rename(AE_D_SPE_DOM = AE.D) %>% 
+  filter(AE_D_SPE_DOM != 0) %>% 
+  select(1:3,5:ncol(AE.D_diff_chem_prop)) %>% 
+        mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+    mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+      H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("AE_D_SPE_DOM"))
+
+AE.D_table_AE_SPE_DOM_plus_D = AE.D_diff_chem_prop %>% 
+  dplyr::mutate(X = case_when(AE.D != 0 & AE.D_th != 0 ~ "Yes", 
+                               AE.D != 0 & AE.D_th == 0 ~ "AE.D",
+                               AE.D == 0 & AE.D_th != 0 ~ "AE.D_th")) %>% 
+  filter(X != "Yes") %>% 
+  dplyr::rename(AE_SPE_DOM_plus_D = AE.D_th) %>% 
+  filter(AE_SPE_DOM_plus_D != 0) %>% 
+  select(1:2,4:ncol(AE.D_diff_chem_prop)) %>% 
+        mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+    mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+      H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("AE_SPE_DOM_plus_D"))
+
+#NSW D-SPE-DOM and SPE-DOM plus D
+
+NSW.D_table_NSW_D_SPE_DOM = NSW.D_diff_chem_prop %>% 
+  dplyr::rename(NSW_D_SPE_DOM = NSW.D) %>% 
+  filter(NSW_D_SPE_DOM != 0) %>% 
+  select(1:3,5:ncol(NSW.D_diff_chem_prop)) %>% 
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+      H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("NSW_D_SPE_DOM"))
+
+NSW.D_table_NSW_SPE_DOM_plus_D =  NSW.D_diff_chem_prop %>% 
+  dplyr::mutate(X = case_when(NSW.D != 0 & NSW.D_th != 0 ~ "Yes", 
+                               NSW.D != 0 & NSW.D_th == 0 ~ "NSW.D",
+                               NSW.D == 0 & NSW.D_th != 0 ~ "NSW.D_th")) %>% 
+  filter(X != "Yes") %>% 
+  dplyr::rename(NSW_SPE_DOM_plus_D = NSW.D_th) %>% 
+  filter(NSW_SPE_DOM_plus_D != 0) %>% 
+  select(1:2,4:ncol(NSW.D_diff_chem_prop)) %>% 
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+      H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("NSW_SPE_DOM_plus_D"))
+
+#AE and NSW double minus
+
+AE_table_AE_D_SPE_DOM_minus_minus_D = AE_diff_chem_double_prop %>% 
+  dplyr::rename(AE_D_SPE_DOM_minus_minus_D = AE_th) %>% 
+  dplyr::rename(mz=mz_minus_D) %>% 
+   filter(AE_D_SPE_DOM_minus_minus_D != 0) %>% 
+        mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+    mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>%       summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+      H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("AE_D_SPE_DOM_minus_minus_D"))
+
+
+
+NSW_table_NSW_D_SPE_DOM_minus_minus_D = NSW_diff_chem_double_prop %>% 
+  dplyr::rename(NSW_D_SPE_DOM_minus_minus_D = NSW_th) %>% 
+  dplyr::rename(mz=mz_minus_D) %>% 
+   filter(NSW_D_SPE_DOM_minus_minus_D != 0) %>% 
+      mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+    mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(H.C = ifelse(H.C == "NaN", 0, H.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+      Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+      H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("NSW_D_SPE_DOM_minus_minus_D"))
+
+# pot derivatize
+
+AE_table_AE_SPE_DOM_pot_D = AE_diff_chem_pot_D %>% 
+  dplyr::rename(AE_SPE_DOM_pot_D = AE.D_th) %>% 
+  filter(AE_SPE_DOM_pot_D != 0) %>% 
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+            H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("AE_SPE_DOM_pot_D"))
+
+AE_table_AE_D_SPE_DOM_pot_D = AE_diff_chem_pot_D_1 %>% 
+  dplyr::rename(AE_D_SPE_DOM_pot_D = AE_th) %>% 
+  filter(AE_D_SPE_DOM_pot_D != 0) %>% 
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+            H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("AE_D_SPE_DOM_pot_D"))
+
+NSW_table_NSW_SPE_DOM_pot_D = NSW_diff_chem_pot_D %>% 
+  dplyr::rename(NSW_SPE_DOM_pot_D = NSW.D_th) %>% 
+  filter(NSW_SPE_DOM_pot_D != 0) %>% 
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+            H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("NSW_SPE_DOM_pot_D"))
+
+
+
+NSW_table_NSW_D_SPE_DOM_pot_D = NSW_diff_chem_pot_D_1 %>% 
+  dplyr::rename(NSW_D_SPE_DOM_pot_D = NSW_th) %>% 
+  filter(NSW_D_SPE_DOM_pot_D != 0) %>% 
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz), 
+              sd_mz = sd(mz),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz!=0),
+            H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("NSW_D_SPE_DOM_pot_D"))
+
+
+#SPE-DOM minus D
+
+
+AE_table_AE_SPE_DOM_minus_D_prop = AE_diff_chem_SPE_DOM_minus_D_prop %>% 
+  dplyr::rename(AE_SPE_DOM_minus_D = AE) %>% 
+  filter(AE_SPE_DOM_minus_D != 0) %>% 
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz_minus_D), 
+              sd_mz = sd(mz_minus_D),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz_minus_D!=0),
+            H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("AE_SPE_DOM_minus_D"))
+
+NSW_table_NSW_SPE_DOM_minus_D_prop = NSW_diff_chem_SPE_DOM_minus_D_prop %>% 
+  dplyr::rename(NSW_SPE_DOM_minus_D = NSW) %>% 
+  filter(NSW_SPE_DOM_minus_D != 0) %>% 
+    mutate(AI_mod = ifelse(AI_mod <= 0, 0, AI_mod)) %>%   mutate(AI_mod = ifelse(AI_mod == "-Inf", 0, AI_mod)) %>%
+  mutate(AI_mod = ifelse(AI_mod == "Inf", 0, AI_mod)) %>%
+  mutate(H.C = ifelse(H.C == "Inf", 0, H.C)) %>%
+  mutate(O.C = ifelse(O.C == "Inf", 0, O.C)) %>%
+  mutate(O.C = ifelse(O.C == "NaN", 0, O.C)) %>%
+  mutate(undefined = ifelse(	
+Aromatic == 0 & Highly_unsaturated == 0 & Saturated == 0 & Unsaturated ==0, NA,1)) %>% 
+  drop_na(undefined) %>% 
+      summarize(
+      mz_mean = mean(mz_minus_D), 
+              sd_mz = sd(mz_minus_D),
+      N_count = length(N[N!=0]),
+      O_count = length(O[O!=0]),
+            Aromatic_count = length(Aromatic[Aromatic!=0]),
+      Highly_unsaturated_count = length(Highly_unsaturated[Highly_unsaturated!=0]),
+      Saturated_count = length(Saturated[Saturated!=0]),
+      Unsaturated_count = length(Unsaturated[Unsaturated!=0]),
+      Total_formula = length(mz_minus_D!=0),
+            H.C_mean = mean(H/C), 
+              sd_H.C = sd(H/C),
+      O.C_mean = mean(O/C), 
+              sd_O.C = sd(O/C),       
+      AI_mod_mean = mean(AI_mod), 
+              sd_AI_mod = sd(AI_mod)) %>% 
+  mutate(sample = c("NSW_SPE_DOM_minus_D"))
+
+
+
+table_diff_counts = AE_table_AE_SPE_DOM %>% 
+  bind_rows(AE.D_table_AE_D_SPE_DOM,
+            AE_table_AE_D_SPE_DOM_minus_D,
+            AE_table_AE_D_SPE_DOM_minus_minus_D,
+            AE.D_table_AE_SPE_DOM_plus_D,
+            AE_table_AE_SPE_DOM_minus_D_prop,
+            AE_table_AE_SPE_DOM_pot_D,
+            AE_table_AE_D_SPE_DOM_pot_D,
+            NSW_table_NSW_SPE_DOM,
+            NSW.D_table_NSW_D_SPE_DOM,
+            NSW_table_NSW_D_SPE_DOM_minus_D,
+            NSW_table_NSW_D_SPE_DOM_minus_minus_D,
+            NSW.D_table_NSW_SPE_DOM_plus_D,
+            NSW_table_NSW_SPE_DOM_minus_D_prop,
+            NSW_table_NSW_SPE_DOM_pot_D,
+            NSW_table_NSW_D_SPE_DOM_pot_D
+            ) %>% 
+  select(16,1:6,8,7,9:10:15)
+
+write.csv(table_diff_counts,"table_diff_counts.csv", row.names = FALSE)
+
+
+
+
+```
+
+
+
+
+### 3.7.2 plots
+
+```{r}
+#all pie plots 
+
+gather_table_diff_counts = table_diff_counts %>% 
+  select(1,6:9) %>% 
+  gather(chem_prop, n, -sample)
+
+gather_table_diff_counts$chem_prop <- factor(gather_table_diff_counts$chem_prop, levels=c("Aromatic_count","Highly_unsaturated_count","Unsaturated_count","Saturated_count"))
+
+
+gather_table_diff_counts= gather_table_diff_counts %>% 
+  mutate_if(is.integer, as.numeric) %>% 
+  arrange(desc(chem_prop)) %>%
+  dplyr::group_by(sample) %>% 
+  mutate(p = n/sum(n),
+      y_mid = lag(cumsum(p), default = 0) + (p/2)) 
+
+
+Farbs = c("Aromatic_count" ="#E69F00", "Highly_unsaturated_count" = "#56B4E9", "Unsaturated_count"="#009E73", "Saturated_count"="#F0E442")
+
+svg("pie_all.svg", width = 40/2.54 , height = 40/2.54, pointsize = 12)
+
+pie_all =  ggplot(gather_table_diff_counts, aes(x="", y=p, fill=chem_prop)) +
+  geom_col(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  facet_wrap(~ sample) +
+  theme_void() +
+  scale_fill_manual(values = Farbs) +
+  geom_text(aes(y = y_mid, label = n), color = "white", size=5)
+
+
+pie_all
+
+dev.off()
+
+#plot diff spectra (AE)
+Col_AE = c("Yes" = "#D55E00", "AE" = "#009E73", "AE.D" = "#F0E442")
+
+Col_NSW =c("Yes" = "#D55E00", "NSW" = "#56B4E9", "NSW.D" = "#0072B2")
+
+svg("AE_diff_spectra.svg", width = 40/2.54 , height = 20/2.54, pointsize = 12)
+
+AE_diff_spectra=ggplot(AE_diff_plot_1, aes_string(x = "mz",y = "Diff_AE")) +
+  geom_bar(aes_string(color = "X"), stat = "identity", width = 0.1, position = position_dodge(width=0.2)) +
+  scale_color_manual(values = Col_AE) +
+  theme_minimal() +
+  theme(axis.line = element_line(color ="Black", size = 1 , linetype = "solid")) 
+
+AE_diff_spectra
+
+dev.off()
+
+#no diff
+
+svg("AE_no_diff_spectra.svg", width = 40/2.54 , height = 20/2.54, pointsize = 12)
+
+AE_no_diff_spectra=ggplot(AE_diff_plot_comp, aes_string(x = "mz",y = "I")) +
+  geom_bar(aes_string(color = "X"), stat = "identity", width = 0.1, position = "stack") +
+  scale_color_manual(values = Col_AE) +
+  theme_minimal() +
+  theme(axis.line = element_line(color ="Black", size = 1 , linetype = "solid"))
+
+
+AE_no_diff_spectra
+
+dev.off()
+
+#AE.D vs AE + D
+
+svg("AE_diff_spectra_AE.D_vs_AEplusD.svg", width = 40/2.54 , height = 20/2.54, pointsize = 12)
+
+AE_diff_spectra_AE.D_vs_AEplusD=ggplot(AE_diff_plot_AE_plus_D, aes_string(x = "mz",y = "I")) +
+  geom_bar(aes_string(color = "X"), stat = "identity", width = 0.1, position = "stack") +
+  scale_color_manual(values = Col_AE) +
+  theme_minimal() +
+  theme(axis.line = element_line(color ="Black", size = 1 , linetype = "solid"))
+
+AE_diff_spectra_AE.D_vs_AEplusD
+
+
+dev.off()
+
+#AE vs AE.D - D
+
+svg("AE_diff_spectra_AE_vs_AEminusD.svg", width = 40/2.54 , height = 20/2.54, pointsize = 12)
+
+AE_diff_spectra_AE_vs_AEminusD=ggplot(AE_diff_plot_AE.D_minus_D, aes_string(x = "mz",y = "I")) +
+  geom_bar(aes_string(color = "X"), stat = "identity", width = 0.1, position = "stack") +
+  scale_color_manual(values = Col_AE) +
+  theme_minimal() +
+  theme(axis.line = element_line(color ="Black", size = 1 , linetype = "solid"))
+
+AE_diff_spectra_AE_vs_AEminusD
+
+dev.off()
+
+#NSW
+
+svg("NSW_diff_spectra.svg", width = 40/2.54 , height = 20/2.54, pointsize = 12)
+
+NSW_diff_spectra=ggplot(NSW_diff_plot_1, aes_string(x = "mz",y = "Diff_NSW")) +
+  geom_bar(aes_string(color = "X"), stat = "identity", width = 0.1, position = position_dodge(width=0.2)) +
+  scale_color_manual(values = Col_NSW) +
+  theme_minimal() +
+  theme(axis.line = element_line(color ="Black", size = 1 , linetype = "solid")) 
+
+NSW_diff_spectra
+
+dev.off()
+
+#NSW no diff
+
+svg("NSW_no_diff_spectra.svg", width = 40/2.54 , height = 20/2.54, pointsize = 12)
+
+NSW_no_diff_spectra=ggplot(NSW_diff_plot_comp, aes_string(x = "mz",y = "I")) +
+  geom_bar(aes_string(color = "X"), stat = "identity", width = 0.1, position = "stack") +
+  scale_color_manual(values = Col_NSW) +
+  theme_minimal() +
+  theme(axis.line = element_line(color ="Black", size = 1 , linetype = "solid"))
+
+NSW_no_diff_spectra
+
+
+dev.off()
+
+#NSW.D vs NSW + D
+
+svg("NSW_diff_spectra_NSW.D_vs_NSWplusD.svg", width = 40/2.54 , height = 20/2.54, pointsize = 12)
+
+NSW_diff_spectra_NSW.D_vs_NSWplusD=ggplot(NSW_diff_plot_NSW_plus_D, aes_string(x = "mz",y = "I")) +
+  geom_bar(aes_string(color = "X"), stat = "identity", width = 0.1, position = "stack") +
+  scale_color_manual(values = Col_NSW) +
+  theme_minimal() +
+  theme(axis.line = element_line(color ="Black", size = 1 , linetype = "solid"))
+
+NSW_diff_spectra_NSW.D_vs_NSWplusD
+
+
+dev.off()
+
+#NSW vs NSW.D - D
+
+svg("NSW_diff_spectra_NSW_vs_NSWminusD.svg", width = 40/2.54 , height = 20/2.54, pointsize = 12)
+
+NSW_diff_spectra_NSW_vs_NSWminusD=ggplot(NSW_diff_plot_NSW.D_minus_D, aes_string(x = "mz",y = "I")) +
+  geom_bar(aes_string(color = "X"), stat = "identity", width = 0.1, position = "stack") +
+  scale_color_manual(values = Col_NSW) +
+  theme_minimal() +
+  theme(axis.line = element_line(color ="Black", size = 1 , linetype = "solid"))
+
+NSW_diff_spectra_NSW_vs_NSWminusD
+
+dev.off()
+
+
+```
+
+
